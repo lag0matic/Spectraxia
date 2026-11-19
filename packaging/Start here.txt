@@ -1,0 +1,24 @@
+Spectraxia for Windows x64
+
+Extract the entire Spectraxia folder to a writable location and run Spectraxia.exe.
+The .NET desktop runtime is bundled. The first launch unpacks runtime files into
+the Windows user temporary directory. Allow a few seconds for this on a fresh PC.
+Each Windows PC needs working USB drivers for the SDRs you connect.
+
+The main receiver uses the RTL-SDR Blog V4. Select ADS-B aircraft and choose
+HackRF to watch aircraft while listening on the RTL. Connect the PortaPack in
+HackRF mode. Each radio has its own ADS-B gain settings.
+
+Keep portable.flag beside the executable. Settings and station memories live in
+Data. New recordings default to Recordings in the same folder. You can pick a
+different recording location in Record / rewind. An external folder must be
+available on the destination PC. Recordings from older builds can be opened
+directly in their original location.
+
+A fresh ZIP starts at zero volume. To bring existing preview settings over,
+close the receiver and copy its frequency.* settings from %LOCALAPPDATA%\Spectraxia
+to Data. When moving the radio, close it first and take the whole Spectraxia
+folder. For an upgrade, keep your Data and Recordings folders.
+
+The available listening modes, tuning controls and decoder details are in
+docs\Receiver guide.md.

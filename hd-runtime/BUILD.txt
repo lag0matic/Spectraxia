@@ -1,0 +1,22 @@
+Spectraxia FM HD Radio decoder for Windows x64
+
+libnrsc5.dll SHA-256
+151a913382bcd524a7d05809dc780f2a1a9e54b062bd976ae561061c719f3d1c
+
+Source and recorded test broadcast
+https://github.com/theori-io/nrsc5/tree/a5c09723b135327aeef157770caae9aebf597547
+Test input is support/sample.xz, a compressed unsigned 8-bit interleaved I/Q recording.
+
+Local cross-build on Ubuntu with MinGW-w64
+git clone --branch v3.2.0 https://github.com/theori-io/nrsc5.git
+cd nrsc5
+support/win-cross-compile 64 --cmake-args=-DBUILD_CLI=OFF -j4
+Copy build-win64/bin/libnrsc5.dll to hd-runtime.
+
+Upstream CMake built and linked the following libraries:
+FFTW 3.3.10 from https://www.fftw.org/fftw-3.3.10.tar.gz
+FAAD2 673a22a3c7c33e96e2ff7aae7c4d2bc190dfbf92 from https://github.com/knik0/faad2
+with nrsc5's support/faad2-hdc-support.patch
+rtl-sdr 619ac3186ea0ffc092615e1f59f7397e5e6f668c from https://gitea.osmocom.org/sdr/rtl-sdr
+libusb d52e355daa09f17ce64819122cb067b8a2ee0d4b from https://github.com/libusb/libusb
+License texts are in licenses/.
