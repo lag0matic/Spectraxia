@@ -14,6 +14,7 @@ internal sealed class AdsbWindow : Form
     internal AdsbWindow(AdsbTraffic traffic, HackrfTuner tuner) : this(traffic, null, tuner, null, null) { }
     private AdsbWindow(AdsbTraffic traffic, AdsbTuner? tuner, HackrfTuner? hackrf, Func<BiasState>? biasState, Action? toggleBias)
     {
+        Icon = Program.AppIcon;
         this.traffic = traffic;
         Text = hackrf == null ? "Spectraxia · RTL-SDR ADS-B aircraft" : "Spectraxia · HackRF ADS-B aircraft";
         StartPosition = FormStartPosition.CenterParent;

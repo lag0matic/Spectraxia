@@ -4,6 +4,7 @@ namespace Spectraxia;
 
 internal static class Program
 {
+    internal static Icon AppIcon { get; } = new(typeof(Program), "Spectraxia.ico");
     [STAThread]
     private static void Main(string[] args)
     {

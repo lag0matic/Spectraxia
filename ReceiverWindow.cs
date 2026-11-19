@@ -77,6 +77,7 @@ internal sealed class ReceiverWindow : Form
     public ReceiverWindow(string? settingsPath = null)
     {
         settings = settingsPath ?? AppPaths.Settings;
+        Icon = Program.AppIcon;
         Text = "Spectraxia";
         WindowState = FormWindowState.Maximized;
         MinimumSize = new Size(520, 320);

@@ -1,3 +1,5 @@
+<img src="assets/Spectraxia.png" alt="Spectraxia icon" width="96" />
+
 # Spectraxia
 
 Spectraxia is a Windows x64 desktop receiver for the RTL-SDR Blog V4. Tune by dragging the spectrum, rewind a signal you just missed, or let the airband scanner catch the next transmission. With a second receiver, you can listen to aircraft on the RTL while a HackRF feeds the live aircraft map.

@@ -5,12 +5,14 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>assets\Spectraxia.ico</ApplicationIcon>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <PropertyGroup>
     <SdrDriverDir Condition="'$(SdrDriverDir)' == ''">C:\sdrpp_windows_x64</SdrDriverDir>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="assets\Spectraxia.ico" LogicalName="Spectraxia.Spectraxia.ico" />
     <EmbeddedResource Include="AdsbMap.json.gz" LogicalName="Spectraxia.AdsbMap" />
     <EmbeddedResource Include="AircraftReference.zip" LogicalName="Spectraxia.AircraftReference" />
     <None Update="hd-runtime\**\*" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
