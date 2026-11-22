@@ -6,7 +6,7 @@ internal sealed class AdsbWindow : Form
     private readonly AircraftMap map = new() { Dock = DockStyle.Fill };
     private readonly AircraftDetails details = new();
     private readonly ListView list = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
-        MultiSelect = false, HideSelection = false, BackColor = Color.FromArgb(24,33,41), ForeColor = Color.WhiteSmoke };
+        MultiSelect = true, HideSelection = false, BackColor = Color.FromArgb(24,33,41), ForeColor = Color.WhiteSmoke };
     private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly AdsbTraffic traffic;
     internal AdsbWindow(AdsbTraffic traffic, AdsbTuner tuner, Func<BiasState> biasState, Action toggleBias)
@@ -47,13 +47,15 @@ internal sealed class AdsbWindow : Form
         layout.Controls.Add(mapArea,0,2); layout.Controls.Add(list,0,3);
         foreach (var (name,width) in new[] { ("ICAO",78),("Callsign",95),("Alt (ft)",86),("GS (kt)",78),
             ("Track (°)",84),("V/S (ft/min)",112),("Category",116),("Position",177),("Seen",72),("Msgs",75) }) list.Columns.Add(name,width);
+        list.SelectedIndexChanged += (_,_) =>
+            map.SelectAircraft(list.SelectedItems.Cast<ListViewItem>().Select(item => item.Name));
         list.ItemActivate += (_,_) =>
         {
             if (list.SelectedItems.Count!=1 || list.SelectedItems[0].Tag is not AircraftRow row) return;
             details.Open(row,Environment.TickCount64);
             if (row.Position is {} fix) map.CenterOn(fix);
         };
-        layout.Controls.Add(new Label { AutoSize = true, Text = "Drag to pan · Wheel to zoom · Hover an airport for its name · Double-click an aircraft for details" },0,4);
+        layout.Controls.Add(new Label { AutoSize = true, Text = "Drag to pan · Wheel to zoom · Hover an airport for its name · Select rows for trails · Double-click for details" },0,4);
         Controls.Add(layout);
         void RefreshTraffic()
         {
@@ -78,18 +80,20 @@ internal sealed class AdsbWindow : Form
                         row.Speed?.ToString()??"",row.Track?.ToString("F0")??"",row.Climb?.ToString()??"",
                         AircraftSymbol.Label(row.Category),row.Position is {} fix ? $"{fix.Lat:F4}, {fix.Lon:F4}" : "",
                         $"{(now-row.Seen)/1000}s",row.Messages.ToString()];
-                    if (list.Items[row.Address] is {} item)
+                    var item = list.Items[row.Address];
+                    if (item != null)
                     {
                         item.Tag = row;
                         for (int i=1; i<cells.Length; i++)
                             if (item.SubItems[i].Text != cells[i]) item.SubItems[i].Text = cells[i];
                     }
-                    else list.Items.Add(new ListViewItem(cells) { Name=row.Address, Tag=row });
+                    else item = list.Items.Add(new ListViewItem(cells) { Name=row.Address, Tag=row, UseItemStyleForSubItems=false });
+                    item.SubItems[6].ForeColor = AircraftSymbol.Tint(row.Category);
                 }
             }
             finally { list.EndUpdate(); }
             if (details.Address is {} address) details.UpdateContact(list.Items[address]?.Tag as AircraftRow,now);
-            map.SetAircraft(rows);
+            map.SetAircraft(rows,now);
         }
         Shown += (_,_) => { RefreshTraffic(); refresh.Start(); };
         FormClosed += (_,_) => { tuner?.Flush(); hackrf?.Flush(); };

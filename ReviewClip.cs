@@ -61,6 +61,7 @@ internal sealed class ReviewClip
 
 internal sealed class ReviewDecoder
 {
+    private VoiceFilters voiceFilters = new();
     private ReceiverAudio? decoder;
     private CaptureBand? previous;
     internal static DialSetting Dial(TapeBlock b, long? frequency, ListenMode? mode)
@@ -84,11 +85,15 @@ internal sealed class ReviewDecoder
         else
         {
             if (previous?.Session != b.Band.Session || previous.Rate != b.Band.Rate || previous.Settled != b.Band.Settled)
+            {
                 decoder = new ReceiverAudio(b.Band.Rate);
+                voiceFilters = new();
+            }
             previous = b.Band;
             var dial = Dial(b, frequency, mode);
             var active = dial.Apply(settings) with { SampleRate = b.Band.Rate, SquelchEnabled = false };
             pcm = decoder!.Decode(b.Iq, b.Band.Center, dial.Hz, active, 100);
+            voiceFilters.Apply(pcm, active, dial.Hz, -1, b.Band.Settled && decoder.Gate);
             if (!b.Band.Settled) Array.Clear(pcm);
             channels = dial.Mode is ListenMode.WFM or ListenMode.IQ ? 2 : 1;
         }

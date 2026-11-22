@@ -108,7 +108,8 @@ internal static class AirScannerCheck
         using var lower = File.OpenRead(Path.Combine(folder, "119537500.cu8"));
         using var upper = File.OpenRead(Path.Combine(folder, "120462500.cu8"));
         var decoder = new ReceiverAudio(rate);
-        var normal = new ReceiverSettings();
+        var normal = new ReceiverSettings(VoiceFilterEnabled:true, ReduceNoise:true);
+        var voice = new VoiceFilters();
         var audible = new Dictionary<long, int>();
         var hits = new List<long>();
         var block = new byte[32768];
@@ -122,8 +123,10 @@ internal static class AirScannerCheck
             Require(center == 119537500 || center == 120462500, "Unexpected slice center");
             source.Position = pos;
             source.ReadExactly(block);
-            var pcm = decoder.Decode(block, center, target.Station, target.Listen(normal), 100);
+            var active = target.Listen(normal);
+            var pcm = decoder.Decode(block, center, target.Station, active, 100);
             target.Gate(pcm, now >= settledAt, center);
+            voice.Apply(pcm, active, target.Station, -1, target.Audible && now >= settledAt && center == target.Center);
             if (!target.Audible || now < settledAt) Require(pcm.All(v => v == 0), "Audio leaked while searching");
             else if (pcm.Any(v => Math.Abs((int)v) > 16))
                 audible[target.Station] = audible.GetValueOrDefault(target.Station) + pcm.Length;
@@ -156,6 +159,17 @@ internal static class AirScannerCheck
             IEnumerable<Control> All(Control c) => c.Controls.Cast<Control>().SelectMany(child => All(child).Prepend(child));
             var plot = All(window).OfType<Spectrum>().Single();
             var panel = All(window).OfType<AirScanPanel>().Single();
+            var voiceToggle = All(window).OfType<CheckBox>().Single(c => c.Text == "Voice filters");
+            var reducer = All(window).OfType<CheckBox>().Single(c => c.Text == "Reduce steady noise");
+            var high = All(window).OfType<TrackBar>().Single(c => c.AccessibleName == "High-pass");
+            var low = All(window).OfType<TrackBar>().Single(c => c.AccessibleName == "Low-pass");
+            Require(!voiceToggle.Checked, "Voice filters should start bypassed");
+            voiceToggle.Checked = reducer.Checked = true;
+            high.Value = Array.IndexOf(VoiceFilters.HighPassOptions,300);
+            low.Value = Array.IndexOf(VoiceFilters.LowPassOptions,2600);
+            var profile = ReceiverSettings.Load(Path.ChangeExtension(path, ".receiver.json"));
+            Require(profile is { VoiceFilterEnabled:true, ReduceNoise:true, HighPassHz:300, LowPassHz:2600 },
+                "Voice controls did not save their settings");
             var start = panel.Controls.OfType<Button>().Single(b => b.Text == "Start");
             var original = plot.View;
             original.Zoom(240000);

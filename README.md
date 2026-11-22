@@ -20,10 +20,10 @@ Connect a HackRF One with a 1090 MHz antenna feed. If you use a PortaPack, selec
 | --- | --- |
 | Tuning | Scroll individual VFO digits, drag the spectrum, zoom around a signal, and recall named stations. The band strip includes CB channel numbers. |
 | Listening | Use AM, NFM, WFM, USB, LSB, CW, DSB, or raw I/Q. Broadcast FM supports stereo, RDS/RBDS and detected HD Radio programs. |
-| Interference controls | Adjust tuner gain, RTL digital AGC, squelch, filter width, DC removal and notches. |
+| Interference controls | Adjust tuner gain, RTL digital AGC, squelch, filter width, DC removal and notches. Voice filters add adjustable high-pass and low-pass cutoffs plus optional steady-noise reduction. |
 | Recording and rewind | Save decoded audio, wideband I/Q, or both. Rewind about 30 seconds and tune a different signal inside the recorded capture. |
 | Airband scanning | Sweep a frequency range, hold for replies, skip a channel temporarily or lock it out across sessions. |
-| Aircraft map | Decode 1090 MHz DF17 extended squitter, plot reported positions on an offline map, and open an aircraft's details from the list. |
+| Aircraft map | Decode 1090 MHz DF17 extended squitter, see aircraft colored by category on an offline map, and select rows to show up to ten minutes of position history. Double-click a row for aircraft details. |
 
 In the portable build, settings and memories live in `Data` beside the executable. New recordings default to `Recordings`. Close the app before moving the folder or carrying those directories into a new release.
 

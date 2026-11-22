@@ -26,6 +26,15 @@ internal sealed class AircraftMap : Control
         return JsonSerializer.Deserialize<Geography>(stream)!;
     });
     private AircraftRow[] rows = [];
+    private sealed class Trail(long firstSeen)
+    {
+        internal long FirstSeen { get; } = firstSeen;
+        internal long? LastFix;
+        internal readonly Queue<(long Time, GeoPosition Position)> Points = new();
+    }
+    private const long TrailDurationMs = 10 * 60_000;
+    private readonly Dictionary<string, Trail> trails = new();
+    private HashSet<string> selected = new();
     private GeoPosition center = new(15, 0);
     private double span = 360;
     private bool positioned;
@@ -44,9 +53,32 @@ internal sealed class AircraftMap : Control
         AccessibleName = "Aircraft map";
         TabStop = true;
     }
-    internal void SetAircraft(AircraftRow[] next)
+    internal void SelectAircraft(IEnumerable<string> addresses)
+    {
+        selected = addresses.ToHashSet();
+        Invalidate();
+    }
+    internal void SetAircraft(AircraftRow[] next, long now)
     {
         rows = next;
+        var visibleContacts = new HashSet<string>();
+        foreach (var row in rows)
+        {
+            if (row.Position is not {} fix || row.PositionSeen is not long time) continue;
+            visibleContacts.Add(row.Address);
+            if (!trails.TryGetValue(row.Address, out var trail) || trail.FirstSeen != row.FirstSeen)
+                trails[row.Address] = trail = new Trail(row.FirstSeen);
+            if (time - trail.LastFix > 60_000) trail.Points.Clear();
+            while (trail.Points.TryPeek(out var oldest) && now - oldest.Time > TrailDurationMs)
+                trail.Points.Dequeue();
+            if (trail.LastFix != time)
+            {
+                trail.Points.Enqueue((time,fix));
+                trail.LastFix = time;
+            }
+        }
+        foreach (var address in trails.Keys.Where(key => !visibleContacts.Contains(key)).ToArray())
+            trails.Remove(address);
         if (!positioned && rows.FirstOrDefault(r => r.Position.HasValue)?.Position is {} first) CenterOn(first);
         Invalidate();
     }
@@ -226,6 +258,22 @@ internal sealed class AircraftMap : Control
         }
         var g=e.Graphics;
         g.DrawImageUnscaled(basemap,0,0);
+        var smoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        foreach (var row in rows)
+        {
+            if (!selected.Contains(row.Address) || !trails.TryGetValue(row.Address, out var trail) || trail.Points.Count < 2) continue;
+            using var pen = new Pen(Color.FromArgb(205,AircraftSymbol.Tint(row.Category)), 2 * DeviceDpi/96f);
+            PointF? previous = null;
+            foreach (var (_,fix) in trail.Points)
+            {
+                var point = Screen(fix.Lon,fix.Lat);
+                if (previous is {} start && Math.Abs(point.X-start.X) < 180*ScaleX)
+                    g.DrawLine(pen,start,point);
+                previous = point;
+            }
+        }
+        g.SmoothingMode = smoothing;
         using var labelBackground = new SolidBrush(Color.FromArgb(224,17,29,38));
         foreach (var row in rows)
         {

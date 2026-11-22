@@ -7,7 +7,8 @@ internal sealed record ReceiverSettings(bool Manual = false, int GainTenths = 0,
     bool AverageTrace = false, bool PeakHold = false, int HoldSeconds = 3, int WaterfallMin = -85, int WaterfallMax = -22, ListenMode Mode = ListenMode.WFM, int FilterHz = 0, bool ForceMono = false,
     Dictionary<string, AgcSpeed>? AudioAgcByMode = null, bool RemoveDc = false,
     ManualNotch[]? Notches = null, bool BypassNotches = false, int AutoNotchHz = 0,
-    bool BalanceIq = false, decimal QGainDb = 0, decimal QPhaseDegrees = 0, string? RecordingFolder = null)
+    bool BalanceIq = false, decimal QGainDb = 0, decimal QPhaseDegrees = 0, string? RecordingFolder = null,
+    bool VoiceFilterEnabled = false, int HighPassHz = 250, int LowPassHz = 3200, bool ReduceNoise = false)
 {
     internal int Width { get { var r = Listening.Range(Mode); return Mode == ListenMode.WFM ? WfmBandwidthKhz * 1000 : Math.Clamp(FilterHz == 0 ? r.Default : FilterHz, r.Min, r.Max); } }
     internal static int BandwidthStep(int khz) => Math.Clamp((int)Math.Round(Math.Clamp(khz, 50, 200) / 5.0) * 5, 50, 200);
@@ -42,6 +43,8 @@ internal sealed record ReceiverSettings(bool Manual = false, int GainTenths = 0,
             if (value != null) return value with { SquelchDbfs = Math.Clamp(value.SquelchDbfs, -95, 0), HoldSeconds = Math.Clamp(value.HoldSeconds, 0, 30),
                 WfmBandwidthKhz = BandwidthStep(value.WfmBandwidthKhz),
                 AutoNotchHz = value.AutoNotchHz is 40 or 100 or 220 ? value.AutoNotchHz : 0,
+                HighPassHz = VoiceFilters.HighPassOptions.Contains(value.HighPassHz) ? value.HighPassHz : 250,
+                LowPassHz = VoiceFilters.LowPassOptions.Contains(value.LowPassHz) ? value.LowPassHz : 3200,
                 QGainDb = Math.Clamp(value.QGainDb, -6m, 6m), QPhaseDegrees = Math.Clamp(value.QPhaseDegrees, -20m, 20m),
                 Notches = value.Notches?.Where(n => n != null && n.Hz is >= 0 and <= TuningView.MaxHz &&
                     ManualNotch.Widths.Contains(n.WidthHz)).DistinctBy(n => n.Hz).ToArray(),

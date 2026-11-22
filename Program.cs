@@ -49,7 +49,7 @@ internal static class Program
             if (!AdsbCheck.Run() || !CheckBiasT() || !BroadcastCheck.Run() || !SignalCheck() || !CheckModes() || !CheckChannel(-200_000) || !CheckChannel(200_000) ||
                 !CheckChannel(-800_000, 1_920_000) || !CheckChannel(950_000, 2_400_000) ||
                 !CheckView() || !CheckSweep() || !CheckClockAvoidance() || !CheckPixelPeaks() || !CheckDisplay() || !CheckReceiverControls() || !CheckLibrary() ||
-                !CheckBandPlan() || !CheckAudioAgc() || !RfFilterCheck.Run() ||
+                !CheckBandPlan() || !CheckAudioAgc() || !RfFilterCheck.Run() || !VoiceFilterCheck.Run() ||
                 !RecordingCheck.AutoNotchWorks() || !RecordingCheck.Run() ||
                 Tuning.Step(14_230_000, 1_000_000, 120) != 15_230_000 ||
                 Tuning.Step(14_230_000, 1_000, -120) != 14_229_000 ||

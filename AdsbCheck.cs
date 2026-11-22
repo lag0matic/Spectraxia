@@ -47,12 +47,13 @@ internal static class AdsbCheck
             Math.Abs(pos.Lon-3.91937)>.00003) return false;
         using var map=new AircraftMap { Size=new Size(640,320) };
         using var image=new Bitmap(map.Width,map.Height);
-        map.SetAircraft(rows); map.DrawToBitmap(image,map.ClientRectangle);
-        if (image.GetPixel(320,160).ToArgb()!=Color.FromArgb(34,92,92).ToArgb()) return false;
+        map.SetAircraft(rows,now); map.DrawToBitmap(image,map.ClientRectangle);
+        var tint = AircraftSymbol.Tint(row.Category);
+        if (image.GetPixel(320,160).ToArgb()!=Color.FromArgb(tint.R*2/3,tint.G*2/3,tint.B*2/3).ToArgb()) return false;
         if (traffic.Snapshot(now+60001).Any(r=>r.Position!=null || r.PositionSeen!=null) ||
             traffic.Snapshot(now+120001).Length!=0) return false;
         now+=120002; Send(Odd);
-        return traffic.Snapshot(now).Single().FirstSeen==now && MapDetail() &&
+        return traffic.Snapshot(now).Single().FirstSeen==now && MapDetail() && CheckTrails() &&
             AircraftReference.Lookup("40621D") is { Registration:"G-STBC", TypeCode:"B77W", Model:"BOEING 777-300ER" } &&
             AircraftReference.Lookup("FFFFFF")==null;
     }
@@ -91,6 +92,45 @@ internal static class AdsbCheck
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
 
+    private static bool CheckTrails()
+    {
+        using var map = new AircraftMap { Size = new Size(600,300) };
+        using var image = new Bitmap(map.Width,map.Height);
+        map.CenterOn(new(0,0));
+        AircraftRow Fix(string address, double lat, double lon, long time) =>
+            new(address, address, null, null, null, null, new GeoPosition(lat,lon), time, 1)
+                { FirstSeen=0, PositionSeen=time };
+        void Update(double lon, long time) => map.SetAircraft([Fix("AAAAAA",.5,lon,time),Fix("BBBBBB",0,lon,time)],time);
+        (int A,int B) Pixels()
+        {
+            map.DrawToBitmap(image,map.ClientRectangle);
+            return (image.GetPixel(300,100).ToArgb(),image.GetPixel(300,150).ToArgb());
+        }
+        Update(-1,0);
+        Update(1,1000);
+        var blank = Pixels();
+        map.SelectAircraft(["AAAAAA"]);
+        var first = Pixels();
+        if (first.A == blank.A || first.B != blank.B) return false;
+        map.SelectAircraft(["BBBBBB"]);
+        var second = Pixels();
+        if (second.A != blank.A || second.B == blank.B) return false;
+        map.SelectAircraft(["AAAAAA","BBBBBB"]);
+        if (Pixels() != (first.A,second.B)) return false;
+        map.SelectAircraft([]);
+        if (Pixels() != blank) return false;
+        map.SelectAircraft(["AAAAAA"]);
+        // Continuous fresh reports at the end of the trail age out its starting point.
+        for (long time=51_000;time<=651_000;time+=50_000) Update(1,time);
+        if (Pixels() != blank) return false;
+        // No invented path back through the midpoint after lost coverage.
+        Update(-1,720_000);
+        if (Pixels() != blank) return false;
+        map.SetAircraft([],720_001);
+        Update(1,721_000);
+        return Pixels() == blank;
+    }
+
     internal static bool MapDetail(string? previewPath = null)
     {
         var traffic = new AdsbTraffic();
@@ -118,6 +158,8 @@ internal static class AdsbCheck
             return pixels;
         }
         var heavy=Icon(EmitterCategory.Heavy,0);
+        var categories = Enum.GetValues<EmitterCategory>();
+        if (categories.Select(c => AircraftSymbol.Tint(c).ToArgb()).Distinct().Count() != categories.Length) return false;
         if (heavy.Count<=Icon(EmitterCategory.Light,0).Count ||
             heavy.SetEquals(Icon(EmitterCategory.Rotorcraft,0)) || heavy.SetEquals(Icon(EmitterCategory.Heavy,90))) return false;
         using var map = new AircraftMap { Size = new(1000,500), Font = new("Segoe UI",9) };
@@ -128,7 +170,7 @@ internal static class AdsbCheck
             sample with { Callsign="DEMO 1", Category=EmitterCategory.Light, Track=16, Position=new(39.94,-86.43) },
             sample with { Callsign="DEMO 2", Category=EmitterCategory.Heavy, Track=222, Position=new(39.79,-86.22) },
             sample with { Callsign="DEMO 3", Category=EmitterCategory.Rotorcraft, Track=84, Position=new(39.85,-85.98) }
-        ]);
+        ],1);
         using var bitmap = new Bitmap(map.Width,map.Height);
         map.DrawToBitmap(bitmap,map.ClientRectangle);
         if (previewPath!=null) bitmap.Save(previewPath,System.Drawing.Imaging.ImageFormat.Png);

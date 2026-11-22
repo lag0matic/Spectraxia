@@ -193,6 +193,34 @@ internal sealed class ReceiverWindow : Form
         audioAgc.Items.AddRange(Enum.GetNames<AgcSpeed>());
         sidebar.Controls.Add(new Label { Text = "Audio AGC", AutoSize = true });
         sidebar.Controls.Add(audioAgc);
+        var voice = new CheckBox { Text = "Voice filters", AutoSize = true, Checked = receiver.VoiceFilterEnabled };
+        var voicePanel = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty, Visible = voice.Checked };
+        sidebar.Controls.Add(voice);
+        sidebar.Controls.Add(voicePanel);
+        void AddCutoff(string name, int[] choices, int hz, Action<int> save)
+        {
+            var label = new Label { AutoSize = true };
+            var slider = new TrackBar { Width = 210, Height = 24, AutoSize = false, TickStyle = TickStyle.None,
+                Minimum = 0, Maximum = choices.Length-1, Value = Array.IndexOf(choices,hz), AccessibleName = name };
+            void ShowValue() => label.Text = name + " · " + (choices[slider.Value] == 0 ? "off" : $"{choices[slider.Value]:N0} Hz");
+            ShowValue();
+            slider.ValueChanged += (_,_) => { ShowValue(); save(choices[slider.Value]); };
+            voicePanel.Controls.Add(label);
+            voicePanel.Controls.Add(slider);
+        }
+        AddCutoff("High-pass", VoiceFilters.HighPassOptions, receiver.HighPassHz,
+            hz => ChangeReceiver(receiver with { HighPassHz = hz }));
+        AddCutoff("Low-pass", VoiceFilters.LowPassOptions, receiver.LowPassHz,
+            hz => ChangeReceiver(receiver with { LowPassHz = hz }));
+        var noise = new CheckBox { Text = "Reduce steady noise", AutoSize = true, Checked = receiver.ReduceNoise };
+        voicePanel.Controls.Add(noise);
+        noise.CheckedChanged += (_,_) => ChangeReceiver(receiver with { ReduceNoise = noise.Checked });
+        voice.CheckedChanged += (_,_) =>
+        {
+            voicePanel.Visible = voice.Checked;
+            ChangeReceiver(receiver with { VoiceFilterEnabled = voice.Checked });
+        };
         var autoNotch = new ComboBox { AccessibleName = "Auto notch for AM and sideband",
             DropDownStyle = ComboBoxStyle.DropDownList, Width = 218 };
         int[] notchWidths = [0,40,100,220];
@@ -220,6 +248,7 @@ internal sealed class ReceiverWindow : Form
             fitting = true;
             modeButtons[shown.Mode].Checked = true;
             audioAgc.Enabled = shown.Mode != ListenMode.IQ && scanTarget == null;
+            voice.Enabled = voicePanel.Enabled = shown.Mode != ListenMode.IQ;
             autoNotch.Enabled = shown.Mode is ListenMode.AM or ListenMode.USB or ListenMode.LSB;
             audioAgc.SelectedIndex = (int)shown.AudioSpeed;
             stereoChoice.Visible = shown.Mode == ListenMode.WFM;
@@ -823,6 +852,7 @@ internal sealed class ReceiverWindow : Form
         try
         {
             var decoder = new ReceiverAudio(config.SampleRate);
+            var voiceFilters = new VoiceFilters();
             using var digital = new HdReceiver(config.SampleRate);
             int retunes = 0;
             var session=Guid.NewGuid();
@@ -853,6 +883,9 @@ internal sealed class ReceiverWindow : Form
                     if (hd == null) Array.Clear(pcm);
                     else digitalAudio = hd.Render(pcm, decoder.Gate, active.ForceMono);
                 }
+                bool audible = settled && decoder.Gate && (program < 0 || digitalAudio)
+                    && (target == null || target.Audible && target.Center == blockCenter);
+                voiceFilters.Apply(pcm, active, decoder.DecodedStation, program, audible);
                 origin ??= DateTimeOffset.UtcNow.AddSeconds(-iq.Length/(2.0*config.SampleRate));
                 var meta=new CaptureBand(config.SampleRate,blockCenter,decoder.DecodedStation,active.Mode,active.Width,settled,session);
                 tape.Append(new TapeBlock(origin.Value.AddSeconds(pairs/(double)config.SampleRate),meta,captured,pcm,stereo?2:1));

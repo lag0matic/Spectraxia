@@ -24,6 +24,24 @@ internal static class AircraftSymbol
         EmitterCategory.LighterThanAir => "Lighter than air", _ => c.ToString()
     };
 
+    internal static Color Tint(EmitterCategory category) => category switch
+    {
+        EmitterCategory.Light => Color.FromArgb(112, 230, 162),
+        EmitterCategory.Small => Color.FromArgb(81, 211, 208),
+        EmitterCategory.Large => Color.FromArgb(105, 190, 255),
+        EmitterCategory.HighVortex => Color.FromArgb(255, 197, 96),
+        EmitterCategory.Heavy => Color.FromArgb(255, 146, 85),
+        EmitterCategory.HighPerformance => Color.FromArgb(255, 112, 131),
+        EmitterCategory.Rotorcraft => Color.FromArgb(222, 151, 255),
+        EmitterCategory.Glider => Color.FromArgb(208, 230, 108),
+        EmitterCategory.Ultralight => Color.FromArgb(166, 247, 195),
+        EmitterCategory.LighterThanAir => Color.FromArgb(255, 225, 158),
+        EmitterCategory.Parachute => Color.FromArgb(255, 178, 205),
+        EmitterCategory.Uncrewed => Color.FromArgb(159, 173, 255),
+        EmitterCategory.Spacecraft => Color.FromArgb(187, 238, 255),
+        _ => Color.FromArgb(189, 199, 207)
+    };
+
     // Top views face north in local coordinates. Weight categories describe proportions, not airframes.
     private static readonly PointF[] Light = [new(0,-9),new(1.5f,-7),new(2,-3),new(9,-2),new(9,0),
         new(2,0),new(1,5),new(4,6),new(4,7),new(0,7),new(-4,7),new(-4,6),new(-1,5),new(-2,0),
@@ -46,8 +64,9 @@ internal static class AircraftSymbol
             g.RotateTransform((float)(track ?? 0));
             g.ScaleTransform(dpiScale,dpiScale);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using var edge = new Pen(Color.Aquamarine,1.2f) { LineJoin=LineJoin.Round };
-            using var fill = new SolidBrush(Color.FromArgb(34,92,92));
+            var tint = Tint(category);
+            using var edge = new Pen(tint,1.4f) { LineJoin=LineJoin.Round };
+            using var fill = new SolidBrush(Color.FromArgb(tint.R * 2/3, tint.G * 2/3, tint.B * 2/3));
             switch (category)
             {
                 case EmitterCategory.Rotorcraft:
