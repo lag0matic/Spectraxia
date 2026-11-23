@@ -21,7 +21,7 @@ internal sealed class ReceiverAudio(int rate)
     internal string StationName => fm?.Rds.Name ?? "";
     internal string RadioText => fm?.Rds.Text ?? "";
 
-    internal short[] Decode(byte[] iq, long center, long station, ReceiverSettings active, int volume)
+    internal short[] Decode(byte[] iq, long center, long station, ReceiverSettings active, int volume, Action<short[]>? packetAudio = null)
     {
         if (!TuningView.Fits(station, center, rate, active.Mode, active.Width))
             station = lastStation >= 0 && TuningView.Fits(lastStation, center, rate, active.Mode, active.Width) ? lastStation : center;
@@ -35,6 +35,7 @@ internal sealed class ReceiverAudio(int rate)
         FilteredIq = filters.Process(iq, center, active);
         var baseband = channel.Extract(iq, station-center, fm != null ? active.WfmBandwidthKhz : 50, FilteredIq);
         var pcm = fm != null ? fm.Decode(baseband,true,active.ForceMono) : narrow!.Decode(baseband);
+        if (active.Mode == ListenMode.NFM) packetAudio?.Invoke(pcm);
         phase = (phase + baseband.Length/2) % 5;
         Level = narrow?.Level ?? channel.LevelDbfs;
         Gate = active.PassSignal(Level, Gate && !retuned && previous?.SquelchEnabled == active.SquelchEnabled &&

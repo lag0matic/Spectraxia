@@ -15,8 +15,9 @@ internal sealed record DialSetting(long Hz, ListenMode Mode, int Width, int? HdP
         : receiver with { Mode = Mode, FilterHz = Width };
 }
 
-internal sealed record StationMemory(Guid Id, string Name, DialSetting Dial)
+internal sealed record StationMemory(Guid Id, string Name, DialSetting Dial, string? Category = null, bool IncludeInScan = true)
 {
+    [JsonIgnore] internal string Group => string.IsNullOrWhiteSpace(Category) ? BandPlan.At(Dial.Hz) ?? "Other" : Category.Trim();
     public override string ToString() => $"{Name}  ·  {Dial.Hz / 1e6:0.######} MHz" +
         (Dial.HdProgram is int program ? $"  HD{program + 1}" : "");
 }
@@ -30,6 +31,7 @@ internal sealed class FrequencyLibrary
     };
     public Dictionary<string, DialSetting> Bands { get; init; } = [];
     public List<StationMemory> Memories { get; init; } = [];
+    public bool SortFavoritesByName { get; set; }
 
     internal void Remember(DialSetting dial)
     {

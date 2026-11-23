@@ -52,7 +52,7 @@ try {
         [IO.Compression.ZipFileExtensions]::ExtractToFile($reference.GetEntry($entry), (Join-Path $notices "aircraft-reference-$entry.txt"))
     }
 } finally { $reference.Dispose() }
-foreach ($file in 'Spectraxia.exe','rtlsdr.dll','hackrf.dll','pthreadVC2.dll','libusb-1.0.dll','hd-runtime\libnrsc5.dll') {
+foreach ($file in 'Spectraxia.exe','rtlsdr.dll','hackrf.dll','pthreadVC2.dll','libusb-1.0.dll','hd-runtime\libnrsc5.dll','p25-runtime\spectraxia_p25.dll','p25-runtime\Trunker license.txt','p25-runtime\Rust notices.txt') {
     if (!(Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "Missing published file $file" }
 }
 $null = New-Item -ItemType Directory -Force -Path $OutputDir

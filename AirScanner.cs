@@ -1,8 +1,10 @@
 namespace Spectraxia;
 
-internal sealed record ScanTarget(long Center, long Station, bool Audible)
+internal sealed record ScanTarget(long Center, long Station, bool Audible, DialSetting? Favorite = null, int Threshold = -55)
 {
-    internal ReceiverSettings Listen(ReceiverSettings normal) => normal with
+    internal ReceiverSettings Listen(ReceiverSettings normal) => Favorite is {} dial
+        ? dial.Apply(normal) with { SquelchEnabled = true, SquelchDbfs = Threshold }
+        : normal with
         { Mode = ListenMode.AM, FilterHz = 8000, SquelchEnabled = false };
     internal void Gate(short[] pcm, bool settled, long actualCenter)
     {

@@ -50,12 +50,39 @@ internal static class AdsbCheck
         map.SetAircraft(rows,now); map.DrawToBitmap(image,map.ClientRectangle);
         var tint = AircraftSymbol.Tint(row.Category);
         if (image.GetPixel(320,160).ToArgb()!=Color.FromArgb(tint.R*2/3,tint.G*2/3,tint.B*2/3).ToArgb()) return false;
+        if (!CheckMapClick(rows,row)) return false;
         if (traffic.Snapshot(now+60001).Any(r=>r.Position!=null || r.PositionSeen!=null) ||
             traffic.Snapshot(now+120001).Length!=0) return false;
         now+=120002; Send(Odd);
         return traffic.Snapshot(now).Single().FirstSeen==now && MapDetail() && CheckTrails() &&
             AircraftReference.Lookup("40621D") is { Registration:"G-STBC", TypeCode:"B77W", Model:"BOEING 777-300ER" } &&
             AircraftReference.Lookup("FFFFFF")==null;
+    }
+
+    private static bool CheckMapClick(AircraftRow[] rows, AircraftRow target)
+    {
+        using var window = new AdsbWindow(new AdsbTraffic(),new HackrfTuner(Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".json")));
+        IEnumerable<Control> Children(Control parent) => parent.Controls.Cast<Control>().SelectMany(c => Children(c).Prepend(c));
+        var map = Children(window).OfType<AircraftMap>().Single();
+        var list = Children(window).OfType<ListView>().Single();
+        _ = list.Handle;
+        foreach (var row in rows) list.Items.Add(new ListViewItem(row.Address) { Name = row.Address, Tag = row });
+        map.CenterOn(target.Position!.Value);
+        map.SetAircraft(rows,target.Seen);
+        _ = map.Handle;
+        var point = new Point(map.Width/2,map.Height/2);
+        void Mouse(string method, Point p) => typeof(AircraftMap).GetMethod(method,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(map,[new MouseEventArgs(MouseButtons.Left,1,p.X,p.Y,0)]);
+        Mouse("OnMouseDown",point);
+        Mouse("OnMouseUp",point);
+        if (list.SelectedItems.Count != 1 || list.SelectedItems[0].Name != target.Address) return false;
+        list.SelectedItems.Clear();
+        Mouse("OnMouseDown",point);
+        var other = new Point(point.X+40,point.Y);
+        Mouse("OnMouseMove",other);
+        Mouse("OnMouseUp",other);
+        return list.SelectedItems.Count == 0;
     }
 
     private static bool CheckReceiverSettings()
@@ -108,6 +135,20 @@ internal static class AdsbCheck
         }
         Update(-1,0);
         Update(1,1000);
+        if (map.HitAircraft(new(400,100)) != "AAAAAA" || map.HitAircraft(new(400,150)) != "BBBBBB" ||
+            map.HitAircraft(new(300,150)) != null) return false;
+        var site = new GeoPosition(39,179.9);
+        var east = MapRange.Destination(site,125,90);
+        if (east.Lon >= 0 || Math.Abs(MapRange.Distance(site,east)-125) > .001 ||
+            Math.Abs(MapRange.Distance(new(0,0),new(1,0))-60.04) > .01) return false;
+        string path = Path.Combine(Path.GetTempPath(), $"spectraxia-range-{Guid.NewGuid():N}.json");
+        try
+        {
+            var range = new MapRange(site,false);
+            range.Save(path);
+            if (MapRange.Load(path) != range) return false;
+        }
+        finally { File.Delete(path); }
         var blank = Pixels();
         map.SelectAircraft(["AAAAAA"]);
         var first = Pixels();

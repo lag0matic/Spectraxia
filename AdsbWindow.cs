@@ -39,23 +39,75 @@ internal sealed class AdsbWindow : Form
         Control gain = (Control?)rtlGain ?? hackGain!;
         gain.Visible = false;
         settings.CheckedChanged += (_,_) => gain.Visible = settings.Checked;
-        bar.Controls.AddRange([back,bias,settings,status]);
+        var range = new Button { Text = "Range ▾", AutoSize = true, FlatStyle = FlatStyle.Flat };
+        var rangeMenu = new ContextMenuStrip();
+        var place = rangeMenu.Items.Add("Place receiver on map");
+        var rings = new ToolStripMenuItem("Show range rings") { CheckOnClick = true };
+        rangeMenu.Items.Add(rings);
+        var hint = new Label { AutoSize = true };
+        const string gestures = "Click a plane for its trail · Ctrl-click to select more · Double-click a list row for details · Drag to pan · Wheel to zoom";
+        hint.Text = gestures;
+        string rangeFile = Path.ChangeExtension(AppPaths.Settings,".map-range.json");
+        try { map.SetRange(MapRange.Load(rangeFile)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException)
+        { hint.Text = "Could not read the saved receiver position. " + ex.Message; }
+        void SaveRange(MapRange value)
+        {
+            map.SetRange(value);
+            try { value.Save(rangeFile); hint.Text = gestures; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { hint.Text = "Receiver position applies this session. " + ex.Message; }
+        }
+        void PlaceReceiver(bool active)
+        {
+            map.PlacingReceiver = active;
+            map.Cursor = active ? Cursors.Cross : Cursors.Default;
+            range.Text = active ? "Cancel placement" : "Range ▾";
+            hint.Text = active ? "Click your antenna location on the map. You can pan and zoom first." : gestures;
+        }
+        range.Click += (_,_) =>
+        {
+            if (map.PlacingReceiver) { PlaceReceiver(false); return; }
+            rings.Checked = map.Range.ShowRings;
+            rings.Enabled = map.Range.Site.HasValue;
+            rangeMenu.Show(range,new Point(0,range.Height));
+        };
+        place.Click += (_,_) => PlaceReceiver(true);
+        rings.Click += (_,_) => SaveRange(map.Range with { ShowRings = rings.Checked });
+        map.ReceiverPlaced += fix =>
+        {
+            PlaceReceiver(false);
+            SaveRange(map.Range with { Site = fix, ShowRings = true });
+        };
+        Disposed += (_,_) => rangeMenu.Dispose();
+        bar.Controls.AddRange([back,bias,settings,range,status]);
         var mapArea=new Panel { Dock=DockStyle.Fill, Margin=map.Margin };
         mapArea.Controls.Add(map); mapArea.Controls.Add(details);
         mapArea.ClientSizeChanged+=(_,_)=>details.Width=Math.Min(mapArea.ClientSize.Width/2,LogicalToDeviceUnits(335));
         layout.Controls.Add(bar,0,0); layout.Controls.Add(gain,0,1);
         layout.Controls.Add(mapArea,0,2); layout.Controls.Add(list,0,3);
         foreach (var (name,width) in new[] { ("ICAO",78),("Callsign",95),("Alt (ft)",86),("GS (kt)",78),
-            ("Track (°)",84),("V/S (ft/min)",112),("Category",116),("Position",177),("Seen",72),("Msgs",75) }) list.Columns.Add(name,width);
+            ("Track (°)",84),("V/S (ft/min)",112),("Category",116),("Range (NM)",92),("Position",177),("Seen",72),("Msgs",75) }) list.Columns.Add(name,width);
         list.SelectedIndexChanged += (_,_) =>
             map.SelectAircraft(list.SelectedItems.Cast<ListViewItem>().Select(item => item.Name));
+        map.AircraftClicked += (address, additive) =>
+        {
+            if (list.Items[address] is not {} item) return;
+            bool select = !additive || !item.Selected;
+            if (!additive) list.SelectedItems.Clear();
+            item.Selected = select;
+            if (!select) return;
+            item.Focused = true;
+            item.EnsureVisible();
+            if (details.Address != null && item.Tag is AircraftRow row) details.Open(row,Environment.TickCount64);
+        };
         list.ItemActivate += (_,_) =>
         {
             if (list.SelectedItems.Count!=1 || list.SelectedItems[0].Tag is not AircraftRow row) return;
             details.Open(row,Environment.TickCount64);
             if (row.Position is {} fix) map.CenterOn(fix);
         };
-        layout.Controls.Add(new Label { AutoSize = true, Text = "Drag to pan · Wheel to zoom · Hover an airport for its name · Select rows for trails · Double-click for details" },0,4);
+        layout.Controls.Add(hint,0,4);
         Controls.Add(layout);
         void RefreshTraffic()
         {
@@ -78,7 +130,9 @@ internal sealed class AdsbWindow : Form
                 {
                     string[] cells = [row.Address,row.Callsign,row.Altitude?.ToString("N0")??"",
                         row.Speed?.ToString()??"",row.Track?.ToString("F0")??"",row.Climb?.ToString()??"",
-                        AircraftSymbol.Label(row.Category),row.Position is {} fix ? $"{fix.Lat:F4}, {fix.Lon:F4}" : "",
+                        AircraftSymbol.Label(row.Category),
+                        row.Position is {} position && map.Range.Site is {} site ? MapRange.Distance(site,position).ToString("F1") : "",
+                        row.Position is {} fix ? $"{fix.Lat:F4}, {fix.Lon:F4}" : "",
                         $"{(now-row.Seen)/1000}s",row.Messages.ToString()];
                     var item = list.Items[row.Address];
                     if (item != null)

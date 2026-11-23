@@ -4,7 +4,7 @@ using System.Drawing.Drawing2D;
 
 namespace Spectraxia;
 
-internal sealed class AircraftMap : Control
+internal class AircraftMap : Control
 {
     private sealed class Boundary(int level, float[] points)
     {
@@ -38,7 +38,18 @@ internal sealed class AircraftMap : Control
     private GeoPosition center = new(15, 0);
     private double span = 360;
     private bool positioned;
-    private Point drag;
+    private Point drag, press;
+    private bool panning, pointerDown;
+    internal MapRange Range { get; private set; } = new();
+    internal bool PlacingReceiver;
+    internal event Action<GeoPosition>? ReceiverPlaced;
+    internal event Action<string,bool>? AircraftClicked;
+    internal void SetRange(MapRange range)
+    {
+        Range = range;
+        if (!positioned && range.Site is {} site) CenterOn(site);
+        else ResetMap();
+    }
     private Bitmap? basemap;
     private readonly ToolTip airportTip = new();
     private readonly List<(PointF Point, Airport Airport)> airportPoints = [];
@@ -93,7 +104,11 @@ internal sealed class AircraftMap : Control
     {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left) return;
-        Focus(); drag = e.Location; Capture = true;
+        Focus();
+        press = drag = e.Location;
+        pointerDown = true;
+        panning = false;
+        Capture = true;
     }
     protected override void OnMouseMove(MouseEventArgs e)
     {
@@ -114,11 +129,51 @@ internal sealed class AircraftMap : Control
             }
             return;
         }
+        if (!pointerDown || (!panning && InsideClick(e.Location))) return;
+        panning = true;
         center = new(Math.Clamp(center.Lat+(e.Y-drag.Y)/ScaleY,-85,85),
             Math.IEEERemainder(center.Lon-(e.X-drag.X)/ScaleX,360));
         positioned = true; drag = e.Location; ResetMap();
     }
-    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); Capture = false; }
+    private bool InsideClick(Point point) =>
+        Math.Abs(point.X-press.X) <= SystemInformation.DragSize.Width/2 &&
+        Math.Abs(point.Y-press.Y) <= SystemInformation.DragSize.Height/2;
+    internal string? HitAircraft(Point point)
+    {
+        double best = Math.Pow(15*DeviceDpi/96.0,2);
+        string? match = null;
+        foreach (var row in rows)
+        {
+            if (row.Position is not {} fix) continue;
+            var p = Screen(fix.Lon,fix.Lat);
+            if (!ClientRectangle.Contains(Point.Round(p))) continue;
+            double d = Math.Pow(p.X-point.X,2)+Math.Pow(p.Y-point.Y,2);
+            if (d < best || (d == best && selected.Contains(row.Address))) { best = d; match = row.Address; }
+        }
+        return match;
+    }
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (!Capture) pointerDown = false;
+    }
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        bool click = e.Button == MouseButtons.Left && pointerDown && !panning && InsideClick(e.Location);
+        base.OnMouseUp(e);
+        if (e.Button != MouseButtons.Left) return;
+        pointerDown = false;
+        Capture = false;
+        if (!click) return;
+        if (PlacingReceiver)
+        {
+            var fix = new GeoPosition(Math.Clamp(center.Lat-(e.Y-Height*.5)/ScaleY,-90,90),
+                Math.IEEERemainder(center.Lon+(e.X-Width*.5)/ScaleX,360));
+            ReceiverPlaced?.Invoke(fix);
+        }
+        else if (HitAircraft(e.Location) is {} address)
+            AircraftClicked?.Invoke(address,ModifierKeys.HasFlag(Keys.Control));
+    }
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
@@ -133,7 +188,7 @@ internal sealed class AircraftMap : Control
             Math.IEEERemainder(lon-(mouse.X-Width*.5)/ScaleX,360));
         positioned = true; ResetMap();
     }
-    private PointF Screen(double lon, double lat) => new(
+    protected PointF Screen(double lon, double lat) => new(
         (float)(Width*.5+Math.IEEERemainder(lon-center.Lon,360)*ScaleX),
         (float)(Height*.5-(lat-center.Lat)*ScaleY));
 
@@ -244,6 +299,40 @@ internal sealed class AircraftMap : Control
             Label(area.Name,new(p.X-width/2,p.Y+Font.Height),Brushes.DarkGray);
         }
         DrawPlaces(true);
+        if (Range.Site is {} site) DrawRange(g,site);
+    }
+
+    private void DrawRange(Graphics g, GeoPosition site)
+    {
+        using var pen = new Pen(Color.FromArgb(120,106,173,177),DeviceDpi/96f) { DashStyle = DashStyle.Dash };
+        if (Range.ShowRings)
+        {
+            double desiredNm = 105 * DeviceDpi/96.0 * 60 / ScaleY;
+            double step = Math.Pow(10, Math.Floor(Math.Log10(desiredNm)));
+            step *= desiredNm/step <= 1 ? 1 : desiredNm/step <= 2 ? 2 : desiredNm/step <= 5 ? 5 : 10;
+            double middle = MapRange.Distance(site,center);
+            double extent = (Width+Height)*60/ScaleY + step;
+            int first = (int)Math.Max(1, Math.Floor((middle-extent)/step));
+            for (int n = first; n*step <= Math.Min(10800,middle+extent); n++)
+            {
+                PointF? previous = null;
+                PointF? label = null;
+                for (int a=45; a<=405; a+=3)
+                {
+                    var pt = MapRange.Destination(site,n*step,a);
+                    var p = Screen(pt.Lon,pt.Lat);
+                    if (previous is {} last && Math.Abs(p.X-last.X)<180*ScaleX) g.DrawLine(pen,last,p);
+                    if (label == null && p.X>=4 && p.X<Width-70 && p.Y>=0 && p.Y<Height-Font.Height) label=p;
+                    previous=p;
+                }
+                if (label is {} at) TextRenderer.DrawText(g,$"{n*step:0.##} NM",Font,Point.Round(at),Color.LightBlue,BackColor);
+            }
+        }
+        var rx = Screen(site.Lon,site.Lat);
+        float size = 5*DeviceDpi/96f;
+        g.DrawLine(Pens.PaleTurquoise,rx.X-size,rx.Y,rx.X+size,rx.Y);
+        g.DrawLine(Pens.PaleTurquoise,rx.X,rx.Y-size,rx.X,rx.Y+size);
+        g.DrawString("RX",Font,Brushes.PaleTurquoise,rx.X+size,rx.Y-Font.Height);
     }
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -258,6 +347,14 @@ internal sealed class AircraftMap : Control
         }
         var g=e.Graphics;
         g.DrawImageUnscaled(basemap,0,0);
+        DrawContacts(g);
+    }
+    protected void CenterFirst(GeoPosition position)
+    {
+        if (!positioned) CenterOn(position);
+    }
+    protected virtual void DrawContacts(Graphics g)
+    {
         var smoothing = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         foreach (var row in rows)
@@ -275,13 +372,19 @@ internal sealed class AircraftMap : Control
         }
         g.SmoothingMode = smoothing;
         using var labelBackground = new SolidBrush(Color.FromArgb(224,17,29,38));
-        foreach (var row in rows)
+        foreach (var row in rows.OrderBy(row => selected.Contains(row.Address)))
         {
             if (row.Position is not {} fix) continue;
             var p = Screen(fix.Lon,fix.Lat);
             if (!ClientRectangle.Contains(Point.Round(p))) continue;
             AircraftSymbol.Draw(g,p,row.Category,row.Track,DeviceDpi/96f);
             string label = row.Callsign.Length>0 ? row.Callsign : row.Address;
+            if (selected.Contains(row.Address))
+            {
+                float radius = 15*DeviceDpi/96f;
+                g.DrawEllipse(Pens.PaleTurquoise,p.X-radius,p.Y-radius,2*radius,2*radius);
+                if (Range.Site is {} rx) label += $"  {MapRange.Distance(rx,fix):0.0} NM";
+            }
             var extent = g.MeasureString(label,Font);
             var at = new PointF(p.X+16*DeviceDpi/96f,p.Y);
             if (at.X+extent.Width>Width) at.X=p.X-16*DeviceDpi/96f-extent.Width;

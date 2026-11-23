@@ -1,0 +1,16 @@
+[package]
+name = "spectraxia-p25"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rand = "0.9"
+rand_distr = "0.5"
+num-complex = "0.4"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"

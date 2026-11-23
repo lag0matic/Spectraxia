@@ -31,6 +31,20 @@ python .\tools\make-airband-fixtures.py .\airband.wav .\checks\airband
 dotnet $app --check-airband .\checks\airband
 ```
 
+### APRS and P25
+
+For APRS, run `dotnet $app --replay-aprs input.wav` on 48 kHz signed 16-bit PCM. Spectraxia CU8 recordings with their timeline also work. For a bare capture, append its rate in samples/s and center in Hz, for example `dotnet $app --replay-aprs sample.cu8 960000 144330000`. The replay tunes 144.390 MHz in software. Compare decoded packets against Dire Wolf's `atest -F 0` on the corresponding audio. [Dire Wolf](https://github.com/wb2osz/direwolf)
+
+The optional P25 feasibility check uses Python 3 and a separate `p25` executable from stevejost/trunker. It reads a capture offline and reports site identity, in-band group grants, voice frames, and received algorithm indications. It prints observations per frequency and talkgroup. A grant or voice-frame count alone cannot establish clear audio. The Richmond example uses the control channel observed in the November 22 capture. Supply the active control frequency for your own recording. [Reference decoder revision](https://github.com/stevejost/trunker/tree/55f62ab32c414fd40f500443979984de6cbc2754)
+
+The live SAFE-T monitor loads the bundled Windows x64 decoder in `p25-runtime`. To rebuild it, check out the reference revision linked above, install the Windows x64 Rust MSVC toolchain and run `tools\p25-control\build.ps1 -Trunker C:\path\to\trunker`. The adapter uses the upstream C4FM pipeline with strict NID checks and accepts CRC-verified control blocks. The same app path can replay a tower capture with `--replay-safet regional.cu8 2400000 853500000 853725000`. Exit code 0 means at least one direct site report, 1 means none decoded and 2 means invalid input.
+
+```text
+python tools/check-p25-capture.py richmond.cu8 --rate 2400000 --center-hz 852200000 --control-hz 853112500
+```
+
+For the Phase 1 follower regression, run `--check-safet-voice richmond-20261122-181018.cu8 p25-xts5000.cf32`. The first fixture checks the actual 852.250 MHz grant and encrypted-call skip. The second uses the recorded Motorola transmission at 96 kS/s with a scripted grant to exercise frequency translation, clear and wrong-group gating, PCM and return. Appending a talkgroup number to `--replay-safet` also reports any confirmed clear audio in the original capture window. Use 0 for any talkgroup.
+
 ## Create a portable ZIP
 
 Run the packaging script with the native library folder and an x64 redistributable `vcruntime140.dll`. Use a version with two to four numeric components. The script publishes a self-contained Windows application and writes the ZIP and its SHA-256 checksum under `releases`.

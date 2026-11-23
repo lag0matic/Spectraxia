@@ -8,6 +8,8 @@ internal sealed class ReceiverWindow : Form
     private readonly Label radioText = new() { AutoSize = true, MaximumSize = new Size(480,0), Visible = false, UseMnemonic = false };
     private sealed record Broadcast(long Station, string Name, string Text);
     private volatile Broadcast? broadcast;
+    private volatile AprsInbox? aprsInbox;
+    private volatile SafeTReception? safeT;
     private volatile HdReception? hdReception;
     private sealed record HdChoice(long Station, int Program);
     private volatile HdChoice? hdChoice;
@@ -40,7 +42,7 @@ internal sealed class ReceiverWindow : Form
     private volatile string audioDiagnostics = "";
     private int volume;
     private volatile string message = "Starting receiver";
-    private sealed record Frame(long Center, int SampleRate, float[] Bins, ScanTarget? Scan, long Time);
+    private sealed record Frame(long Center, int SampleRate, float[] Bins, ScanTarget? Scan, long Time, bool Gate);
     private readonly AirScanPanel scanner;
     private volatile ScanTarget? scanTarget;
     private Frame? latest;
@@ -447,9 +449,109 @@ internal sealed class ReceiverWindow : Form
             hdChoice = dial.HdProgram is int program ? new(dial.Hz, program) : null;
             RefreshHd();
         }
+        var safeToggle = new CheckBox { Text = "SAFE-T", Appearance = Appearance.Button, AutoSize = true };
+        var safePanel = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Visible = false };
+        var sites = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "SAFE-T control channel", Width = 245 };
+        sites.Items.AddRange(SafeTSite.Local);
+        sites.SelectedIndex = 0;
+        var tuneSite = new Button { Text = "Tune site", AutoSize = true, FlatStyle = FlatStyle.Flat };
+        var groups = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "SAFE-T talkgroup", Width = 165 };
+        groups.Items.AddRange(["Any talkgroup", "Control only"]);
+        groups.SelectedIndex = 0;
+        groups.SelectedIndexChanged += (_,_) =>
+        {
+            if (safeT is {} reception)
+                reception.FollowGroup = groups.SelectedItem is int tg ? tg : groups.SelectedIndex == 0 ? 0 : -1;
+        };
+        var safeRate = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
+        var siteInfo = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
+        safePanel.Controls.AddRange([sites, tuneSite, groups, safeRate, siteInfo]);
+        Controls.Add(safePanel);
+        Controls.SetChildIndex(safePanel, 1);
+        header.Controls.Add(safeToggle);
+        DialSetting? priorSafeDial = null;
+        void TuneSite()
+        {
+            if (sites.SelectedItem is not SafeTSite site || recording || review.Visible || closing) return;
+            var choice = groups.SelectedItem;
+            safeT = new SafeTReception(site) { FollowGroup = choice is int tg ? tg : groups.SelectedIndex == 0 ? 0 : -1 };
+            for (int i = groups.Items.Count-1; i >= 2; i--)
+                if (!Equals(groups.Items[i], choice)) groups.Items.RemoveAt(i);
+            RecallDial(site.Dial);
+        }
+        safeToggle.CheckedChanged += (_, _) =>
+        {
+            safePanel.Visible = safeToggle.Checked;
+            if (safeToggle.Checked)
+            {
+                priorSafeDial = CurrentDial;
+                TuneSite();
+            }
+            else
+            {
+                var previous = safeT;
+                safeT = null;
+                if (!closing && !recording && !review.Visible && scanTarget == null &&
+                    previous != null && CurrentDial == previous.Site.Dial && priorSafeDial != null)
+                    RecallDial(priorSafeDial);
+            }
+        };
+        sites.SelectedIndexChanged += (_,_) => { if (safeToggle.Checked) TuneSite(); };
+        tuneSite.Click += (_,_) => TuneSite();
+        void EnableSafeControls()
+        {
+            safeToggle.Enabled = sites.Enabled = tuneSite.Enabled = !recording && !review.Visible;
+        }
+        recorder.RecordingChanged += _ => EnableSafeControls();
+        review.VisibleChanged += (_,_) => EnableSafeControls();
+        long nextSiteRefresh = 0;
+        poll.Tick += (_,_) =>
+        {
+            long now = Environment.TickCount64;
+            if (safeT is not {} selected || now < nextSiteRefresh) return;
+            nextSiteRefresh = now + 250;
+            var snapshot = selected.Snapshot(now);
+            if (!groups.DroppedDown)
+                foreach (int group in selected.Groups())
+                    if (!groups.Items.Contains(group)) groups.Items.Add(group);
+            safeRate.Text = $"{snapshot.Recent:N0} valid messages / 10 s";
+            siteInfo.Text = scanTarget != null || reviewing || aircraftTraffic != null || frequency != selected.Site.Hz || receiver.Mode != ListenMode.NFM
+                ? "Paused · select Tune site to resume" : snapshot.Status;
+        };
+        var aprs = new Button { Text = "APRS", AutoSize = true, FlatStyle = FlatStyle.Flat };
+        header.Controls.Add(aprs);
+        AprsWindow? packetWindow = null;
+        aprs.Click += (_,_) =>
+        {
+            if (packetWindow != null) { packetWindow.Activate(); return; }
+            if (review.Visible || recording || closing) return;
+            var prior = CurrentDial;
+            var inbox = new AprsInbox();
+            RecallDial(AprsWindow.Dial);
+            aprsInbox = inbox;
+            packetWindow = new AprsWindow(inbox, Path.ChangeExtension(settings,".map-range.json"),
+                () => CurrentDial.Hz != AprsWindow.Dial.Hz || receiver.Mode != ListenMode.NFM || scanTarget != null ||
+                    aircraftTraffic != null || reviewing ? "Paused · tune to 144.390 MHz NFM" : message,
+                () => { if (!recording && !review.Visible && aircraftTraffic == null) RecallDial(AprsWindow.Dial); });
+            packetWindow.FormClosed += (_,_) =>
+            {
+                aprsInbox = null;
+                packetWindow = null;
+                if (!closing && !recording && scanTarget == null && CurrentDial == AprsWindow.Dial) RecallDial(prior);
+            };
+            packetWindow.Show(this);
+        };
+        recorder.RecordingChanged += active => aprs.Enabled = !active && !review.Visible;
+        review.VisibleChanged += (_,_) => aprs.Enabled = !recording && !review.Visible;
         var libraryPanel = new StationPanel(Path.ChangeExtension(settings, ".library.json"),
             () => CurrentDial, () => broadcast is { } ps && ps.Station == frequency ? ps.Name : "",
-            RecallDial, plot);
+            RecallDial, plot, stations =>
+            {
+                if (!scanner.CanStart || review.Visible || aircraftTraffic != null || running is not { IsCompleted: false }) return false;
+                scanToggle.Checked = true;
+                scanner.StartFavorites(stations, receiver.SquelchDbfs);
+                return true;
+            });
         sidebar.Controls.Add(libraryPanel);
         sidebar.Controls.SetChildIndex(libraryPanel, 0);
         var dc = new CheckBox { Text = "Remove center DC", AutoSize = true, Checked = receiver.RemoveDc };
@@ -570,7 +672,9 @@ internal sealed class ReceiverWindow : Form
         scanner.Changed += () =>
         {
             bool wasScanning = scanTarget != null;
-            var next = scanner.Scan?.Target;
+            var previous = scanTarget;
+            var next = scanner.Target;
+            scanToggle.Text = scanner.Favorites == null ? "Airband scanner" : "Favorite scan";
             scanTarget = next;
             bool scanning = next != null;
             if (scanning != wasScanning)
@@ -598,6 +702,7 @@ internal sealed class ReceiverWindow : Form
                     }
                 }
             }
+            if (scanning && wasScanning && next?.Favorite != previous?.Favorite) SetModeControls(false);
             if (next != null) scanView.ShowScan(next, receiver.SampleRate);
             ShowFrequency();
             RefreshHd();
@@ -720,6 +825,7 @@ internal sealed class ReceiverWindow : Form
         FormClosing += async (_, e) =>
         {
             if (closing) { e.Cancel = !drained; return; }
+            safeToggle.Checked = false;
             closing = true;
             scanner.Stop();
             libraryPanel.Flush();
@@ -797,7 +903,7 @@ internal sealed class ReceiverWindow : Form
         if (frame != null && frame.SampleRate == plot.View.SampleRate && ReferenceEquals(scanTarget, frame.Scan))
         {
             plot.Add(frame.Center, frame.Bins);
-            if (frame.Scan != null) scanner.Observe(frame.Center, frame.Bins, frame.Time);
+            if (frame.Scan != null) scanner.Observe(frame.Center, frame.Bins, frame.Time, frame.Gate);
         }
         if (closing || running is { IsCompleted: false } || Environment.TickCount64 < Interlocked.Read(ref retryAfter)) return;
         cancel?.Dispose();
@@ -853,14 +959,26 @@ internal sealed class ReceiverWindow : Form
         {
             var decoder = new ReceiverAudio(config.SampleRate);
             var voiceFilters = new VoiceFilters();
+            AprsInbox? packetOwner = null;
+            Action<short[]>? packetAudio = null;
+            long packetCenter = -1;
             using var digital = new HdReceiver(config.SampleRate);
+            using var controlChannel = new SafeTMonitor();
             int retunes = 0;
             var session=Guid.NewGuid();
             DateTimeOffset? origin=null;
             long pairs=0;
             bool stereo = false;
             long drawAfter = 0;
-            Radio.Receive(hz, config, () => receiver, () => scanTarget?.Center ?? Interlocked.Read(ref requestedCenter),
+            long WantedCenter()
+            {
+                if (scanTarget is {} scan) return scan.Center;
+                if (safeT is {} monitor && !reviewing && receiver.Mode == ListenMode.NFM &&
+                    Interlocked.Read(ref frequency) == monitor.Site.Hz && monitor.VoiceCenter is > 0 and var temporary)
+                    return temporary;
+                return Interlocked.Read(ref requestedCenter);
+            }
+            Radio.Receive(hz, config, () => receiver, WantedCenter,
                 steps => Interlocked.Exchange(ref pendingSteps, steps), token, (iq, blockCenter, settled) =>
             {
 
@@ -868,13 +986,26 @@ internal sealed class ReceiverWindow : Form
                 long station = target?.Station ?? Interlocked.Read(ref frequency);
                 var normal = receiver;
                 var active = target?.Listen(normal) ?? normal;
+                var selected = safeT;
+                bool monitorSite = selected != null && target == null && !reviewing && station == selected.Site.Hz && active.Mode == ListenMode.NFM;
+                controlChannel.Feed(monitorSite ? selected : null, iq, blockCenter, config.SampleRate, settled);
                 bool needsStereoOutput = active.Mode is ListenMode.IQ or ListenMode.WFM;
                 if (stereo != needsStereoOutput) { audio?.Dispose(); audio = null; stereo = needsStereoOutput; }
-                var pcm = decoder.Decode(iq, blockCenter, station, active, 100);
-                target?.Gate(pcm, settled, blockCenter);
+                var owner = settled && target == null && !reviewing && station == AprsWindow.Dial.Hz &&
+                    active.Mode == ListenMode.NFM && TuningView.Fits(station,blockCenter,config.SampleRate,active.Mode,active.Width) ? aprsInbox : null;
+                if (owner != packetOwner || blockCenter != packetCenter)
+                {
+                    packetOwner = owner;
+                    packetCenter = blockCenter;
+                    var modem = owner == null ? null : new AprsModem(owner.Add);
+                    packetAudio = modem == null ? null : samples => modem.Feed(samples);
+                }
+                long audioStation = monitorSite && controlChannel.Voice.Frequency > 0 ? controlChannel.Voice.Frequency : station;
+                var pcm = decoder.Decode(iq, blockCenter, audioStation, active, 100, packetAudio);
                 byte[] captured = (byte[])iq.Clone();
                 var choice = hdChoice;
-                int program = choice?.Station == station && active.Mode == ListenMode.WFM ? choice.Program : -1;
+                int program = target != null ? target.Favorite?.HdProgram ?? -1 :
+                    choice?.Station == station && active.Mode == ListenMode.WFM ? choice.Program : -1;
                 var hd = digital.Push(captured, station, blockCenter, settled && active.Mode == ListenMode.WFM, program);
                 hdReception = hd;
                 bool digitalAudio = false;
@@ -883,16 +1014,18 @@ internal sealed class ReceiverWindow : Form
                     if (hd == null) Array.Clear(pcm);
                     else digitalAudio = hd.Render(pcm, decoder.Gate, active.ForceMono);
                 }
+                target?.Gate(pcm, settled, blockCenter);
                 bool audible = settled && decoder.Gate && (program < 0 || digitalAudio)
                     && (target == null || target.Audible && target.Center == blockCenter);
                 voiceFilters.Apply(pcm, active, decoder.DecodedStation, program, audible);
+                if (monitorSite) controlChannel.Voice.Render(pcm);
                 origin ??= DateTimeOffset.UtcNow.AddSeconds(-iq.Length/(2.0*config.SampleRate));
                 var meta=new CaptureBand(config.SampleRate,blockCenter,decoder.DecodedStation,active.Mode,active.Width,settled,session);
                 tape.Append(new TapeBlock(origin.Value.AddSeconds(pairs/(double)config.SampleRate),meta,captured,pcm,stereo?2:1));
                 pairs+=iq.Length/2;
                 signalTenths = (int)Math.Round(decoder.Level * 10);
                 squelchOpen = decoder.Gate;
-                if(reviewing) { audio?.Dispose(); audio=null; }
+                if(reviewing || monitorSite && selected!.FollowGroup < 0) { audio?.Dispose(); audio=null; }
                 else { audio ??= new Headphones(output,stereo); audio.Play(pcm,Volatile.Read(ref volume)); }
                 message = active.Mode == ListenMode.WFM ? (decoder.StereoLocked && !active.ForceMono ? "Live WFM stereo" : "Live WFM mono") : $"Live {Listening.Name(active.Mode)}";
                 if (program >= 0) message = digitalAudio ? $"Live HD{program + 1}" : $"Live · waiting for HD{program + 1}";
@@ -901,7 +1034,8 @@ internal sealed class ReceiverWindow : Form
                     broadcast = active.Mode == ListenMode.WFM ? new Broadcast(decoder.DecodedStation, decoder.StationName, decoder.RadioText) : null;
                     long halfRate = config.SampleRate / 2;
                     audioDiagnostics = $"RF capture {(blockCenter-halfRate)/1e6:F6}–{(blockCenter+halfRate)/1e6:F6} MHz · hardware retunes {Volatile.Read(ref retunes)} · audio queue empty {audio?.EmptyQueueEvents??0} · dropped frames {audio?.DroppedFrames??0}";
-                    Interlocked.Exchange(ref latest, new Frame(blockCenter, config.SampleRate, Spectrum.Analyze(iq, decoder.FilteredIq), target, Environment.TickCount64));
+                    Interlocked.Exchange(ref latest, new Frame(blockCenter, config.SampleRate, Spectrum.Analyze(iq, decoder.FilteredIq),
+                        target, Environment.TickCount64, decoder.Gate && decoder.DecodedStation == station));
                     drawAfter = Environment.TickCount64 + 48;
                 }
             }, () => Interlocked.Increment(ref retunes), deviceBias);

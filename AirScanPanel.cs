@@ -14,11 +14,19 @@ internal sealed class AirScanPanel : FlowLayoutPanel
     private readonly HashSet<long> locks = [];
     private readonly string lockFile;
     internal AirScanner? Scan { get; private set; }
+    internal FavoriteScanner? Favorites { get; private set; }
+    internal ScanTarget? Target => Favorites?.Target ?? Scan?.Target;
+    private readonly NumericUpDown favoriteLevel = Number(-95, 0, -55, 1, 0);
+    private readonly List<Control> airFields = [];
+    private readonly List<Control> favoriteFields = [];
+    private readonly Func<int> sampleRate;
+    internal bool CanStart => Enabled && start.Enabled;
     internal event Action? Changed;
 
     internal AirScanPanel(string lockFile, Func<int> rate)
     {
         this.lockFile = lockFile;
+        sampleRate = rate;
         Dock = DockStyle.Top;
         AutoSize = true;
         Padding = new Padding(5);
@@ -36,11 +44,14 @@ internal sealed class AirScanPanel : FlowLayoutPanel
         AddField("To MHz", high);
         AddField("Spacing", spacing);
         AddField("Trigger dB above noise", threshold);
+        airFields.AddRange(Controls.Cast<Control>());
+        AddField("Squelch dBFS", favoriteLevel);
+        favoriteFields.AddRange(Controls.Cast<Control>().Skip(airFields.Count));
         AddField("Reply delay (s)", delay);
         Controls.AddRange([start, hold, skip, lockout, clear, state]);
         start.Click += (_, _) =>
         {
-            if (Scan != null) { Stop(); return; }
+            if (Target != null) { Stop(); return; }
             try
             {
                 Scan = new((long)(low.Value * 1e6m), (long)(high.Value * 1e6m), spacing.SelectedIndex == 1, rate(), locks);
@@ -52,8 +63,14 @@ internal sealed class AirScanPanel : FlowLayoutPanel
         };
         delay.ValueChanged += (_, _) => ApplyLevels();
         threshold.ValueChanged += (_, _) => ApplyLevels();
-        hold.Click += (_, _) => { Scan?.ToggleHold(); Publish(); };
-        skip.Click += (_, _) => { Scan?.Skip(Environment.TickCount64, false); Publish(); };
+        favoriteLevel.ValueChanged += (_, _) =>
+        {
+            if (Favorites == null) return;
+            Favorites.Threshold = (int)favoriteLevel.Value;
+            Publish();
+        };
+        hold.Click += (_, _) => { Favorites?.ToggleHold(); Scan?.ToggleHold(); Publish(); };
+        skip.Click += (_, _) => { Favorites?.Skip(); Scan?.Skip(Environment.TickCount64, false); Publish(); };
         lockout.Click += (_, _) => { Scan?.Skip(Environment.TickCount64, true); Publish(); SaveLocks(); };
         clear.Click += (_, _) => { locks.Clear(); Publish(); SaveLocks(); };
         UpdateState();
@@ -79,22 +96,40 @@ internal sealed class AirScanPanel : FlowLayoutPanel
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { state.Text = "Lockouts apply this session. Could not save them."; }
     }
+    internal void StartFavorites(StationMemory[] stations, int threshold)
+    {
+        if (!CanStart || stations.Length == 0) return;
+        Scan = null;
+        favoriteLevel.Value = threshold;
+        Favorites = new(stations, sampleRate(), threshold) { DelayMs = (int)(delay.Value * 1000) };
+        Publish();
+    }
     internal void Stop()
     {
-        if (Scan == null) return;
+        if (Target == null) return;
+        Favorites = null;
         Scan = null;
         state.Text = "";
         Publish();
     }
-    internal void SetAvailable(bool live) => start.Enabled = live || Scan != null;
+    internal void SetAvailable(bool live) => start.Enabled = live || Target != null;
     private void ApplyLevels()
     {
+        if (Favorites != null) Favorites.DelayMs = (int)(delay.Value * 1000);
         if (Scan == null) return;
         Scan.DelayMs = (int)(delay.Value * 1000);
         Scan.Threshold = (int)threshold.Value;
     }
-    internal void Observe(long center, float[] bins, long now)
+    internal void Observe(long center, float[] bins, long now, bool gate = false)
     {
+        if (Favorites is {} favorites)
+        {
+            var prior = favorites.Target;
+            var priorStation = favorites.Current.Id;
+            favorites.Observe(center, gate, now);
+            if (favorites.Target != prior || favorites.Current.Id != priorStation) Publish();
+            return;
+        }
         if (Scan == null) return;
         var before = Scan.Target;
         var channel = Scan.Channel;
@@ -104,6 +139,17 @@ internal sealed class AirScanPanel : FlowLayoutPanel
     private void Publish() { UpdateState(); Changed?.Invoke(); }
     private void UpdateState()
     {
+        foreach (var field in airFields) field.Visible = Favorites == null;
+        foreach (var field in favoriteFields) field.Visible = Favorites != null;
+        lockout.Visible = clear.Visible = Favorites == null;
+        if (Favorites is {} favorite)
+        {
+            start.Text = "Stop";
+            hold.Enabled = skip.Enabled = true;
+            hold.Text = favorite.Held ? "Release hold" : "Hold";
+            state.Text = favorite.Status;
+            return;
+        }
         low.Enabled = high.Enabled = spacing.Enabled = Scan == null;
         hold.Enabled = skip.Enabled = lockout.Enabled = Scan?.Channel != null;
         hold.Text = Scan?.Held == true ? "Release hold" : "Hold";

@@ -8,6 +8,15 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args is ["--check-safet-voice", var localIq, var clearIq])
+        { Environment.ExitCode = SafeTVoiceCheck.Run(localIq, clearIq); return; }
+        if (args.Length is 5 or 6 && args[0] == "--replay-safet")
+        {
+            Environment.ExitCode = SafeTMonitor.Replay(args[1], args[2], args[3], args[4], args.ElementAtOrDefault(5));
+            return;
+        }
+        if (args is ["--replay-aprs", _] or ["--replay-aprs", _, _, _])
+        { Environment.ExitCode = AprsReplay.Run(args); return; }
         if (args is ["--check-airband", var fixtures])
         {
             Environment.ExitCode = AirScannerCheck.Run(fixtures);
@@ -46,7 +55,7 @@ internal static class Program
                     AppPaths.Recordings(AppPaths.SaveRecordingFolder(nested)) != nested)
                 { Environment.ExitCode = 1; return; }
             }
-            if (!AdsbCheck.Run() || !CheckBiasT() || !BroadcastCheck.Run() || !SignalCheck() || !CheckModes() || !CheckChannel(-200_000) || !CheckChannel(200_000) ||
+            if (!AprsCheck.Run() || !AdsbCheck.Run() || !CheckBiasT() || !BroadcastCheck.Run() || !SignalCheck() || !CheckModes() || !CheckChannel(-200_000) || !CheckChannel(200_000) ||
                 !CheckChannel(-800_000, 1_920_000) || !CheckChannel(950_000, 2_400_000) ||
                 !CheckView() || !CheckSweep() || !CheckClockAvoidance() || !CheckPixelPeaks() || !CheckDisplay() || !CheckReceiverControls() || !CheckLibrary() ||
                 !CheckBandPlan() || !CheckAudioAgc() || !RfFilterCheck.Run() || !VoiceFilterCheck.Run() ||
@@ -68,14 +77,14 @@ internal static class Program
         {
             File.WriteAllText(path, """{"Memories":[{"Id":"00000000-0000-0000-0000-000000000001","Name":"Old FM","Dial":{"Hz":101300000,"Mode":"WFM","Width":145000}}]}""");
             var library = FrequencyLibrary.Load(path);
-            if (library.Memories.Single().Dial.HdProgram != null) return false;
+            if (library.Memories.Single() is not { IncludeInScan: true, Group: "FM broadcast", Dial.HdProgram: null }) return false;
             library.Memories.Clear();
             var fm = new DialSetting(101300000, ListenMode.WFM, 145000);
             library.Remember(fm);
             var hf = library.Recall("40m ham band") with { Hz = 7195000, Width = 2400 };
             if (hf.Mode != ListenMode.LSB) return false;
             library.Remember(hf);
-            var memory = new StationMemory(Guid.NewGuid(), "G 1013", fm with { HdProgram = 1 });
+            var memory = new StationMemory(Guid.NewGuid(), "G 1013", fm with { HdProgram = 1 }, "Local", false);
             library.Remember(memory.Dial);
             library.Memories.Add(memory);
             library.Save(path);

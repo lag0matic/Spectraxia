@@ -16,6 +16,7 @@
     <EmbeddedResource Include="AdsbMap.json.gz" LogicalName="Spectraxia.AdsbMap" />
     <EmbeddedResource Include="AircraftReference.zip" LogicalName="Spectraxia.AircraftReference" />
     <None Update="hd-runtime\**\*" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Update="p25-runtime\**\*" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(SdrDriverDir)\rtlsdr.dll')">
     <None Include="$(SdrDriverDir)\rtlsdr.dll;$(SdrDriverDir)\libusb-1.0.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
