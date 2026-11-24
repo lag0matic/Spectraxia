@@ -12,11 +12,14 @@ internal sealed class AdsbWindow : Form
     internal AdsbWindow(AdsbTraffic traffic, AdsbTuner tuner, Func<BiasState> biasState, Action toggleBias)
         : this(traffic, tuner, null, biasState, toggleBias) { }
     internal AdsbWindow(AdsbTraffic traffic, HackrfTuner tuner) : this(traffic, null, tuner, null, null) { }
+    internal AdsbWindow(AdsbTraffic traffic) : this(traffic, null, null, null, null) { }
     private AdsbWindow(AdsbTraffic traffic, AdsbTuner? tuner, HackrfTuner? hackrf, Func<BiasState>? biasState, Action? toggleBias)
     {
         Icon = Program.AppIcon;
         this.traffic = traffic;
-        Text = hackrf == null ? "Spectraxia · RTL-SDR ADS-B aircraft" : "Spectraxia · HackRF ADS-B aircraft";
+        bool network = tuner == null && hackrf == null;
+        string source = network ? "BaseStation" : hackrf == null ? "RTL-SDR" : "HackRF";
+        Text = $"Spectraxia · {source} ADS-B aircraft";
         StartPosition = FormStartPosition.CenterParent;
         Size = new(1080,720); MinimumSize = new(650,450);
         BackColor = Color.FromArgb(28,38,47); ForeColor = Color.WhiteSmoke;
@@ -29,16 +32,20 @@ internal sealed class AdsbWindow : Form
         layout.RowStyles.Add(new(SizeType.Percent,32));
         layout.RowStyles.Add(new(SizeType.AutoSize));
         var bar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
-        var back = new Button { Text = hackrf == null ? "Return to radio" : "Close aircraft", AutoSize = true, FlatStyle = FlatStyle.Flat };
+        var back = new Button { Text = tuner != null ? "Return to radio" : "Close aircraft", AutoSize = true, FlatStyle = FlatStyle.Flat };
         back.Click += (_,_) => Close();
         var bias = new Button { AutoSize = true, FlatStyle = FlatStyle.Flat, Visible = biasState != null };
         bias.Click += (_,_) => { toggleBias?.Invoke(); bias.Enabled = false; };
         var settings = new CheckBox { Text = "Receiver settings", Appearance = Appearance.Button, AutoSize = true };
         var rtlGain = tuner == null ? null : new AdsbGainPanel(tuner);
         var hackGain = hackrf == null ? null : new HackrfGainPanel(hackrf);
-        Control gain = (Control?)rtlGain ?? hackGain!;
-        gain.Visible = false;
-        settings.CheckedChanged += (_,_) => gain.Visible = settings.Checked;
+        Control? gain = (Control?)rtlGain ?? hackGain;
+        settings.Visible = gain != null;
+        if (gain != null)
+        {
+            gain.Visible = false;
+            settings.CheckedChanged += (_,_) => gain.Visible = settings.Checked;
+        }
         var range = new Button { Text = "Range ▾", AutoSize = true, FlatStyle = FlatStyle.Flat };
         var rangeMenu = new ContextMenuStrip();
         var place = rangeMenu.Items.Add("Place receiver on map");
@@ -84,7 +91,8 @@ internal sealed class AdsbWindow : Form
         var mapArea=new Panel { Dock=DockStyle.Fill, Margin=map.Margin };
         mapArea.Controls.Add(map); mapArea.Controls.Add(details);
         mapArea.ClientSizeChanged+=(_,_)=>details.Width=Math.Min(mapArea.ClientSize.Width/2,LogicalToDeviceUnits(335));
-        layout.Controls.Add(bar,0,0); layout.Controls.Add(gain,0,1);
+        layout.Controls.Add(bar,0,0);
+        if (gain != null) layout.Controls.Add(gain,0,1);
         layout.Controls.Add(mapArea,0,2); layout.Controls.Add(list,0,3);
         foreach (var (name,width) in new[] { ("ICAO",78),("Callsign",95),("Alt (ft)",86),("GS (kt)",78),
             ("Track (°)",84),("V/S (ft/min)",112),("Category",116),("Range (NM)",92),("Position",177),("Seen",72),("Msgs",75) }) list.Columns.Add(name,width);
@@ -119,7 +127,8 @@ internal sealed class AdsbWindow : Form
             rtlGain?.RefreshReceiver(traffic.GainSteps, recent);
             hackGain?.RefreshReceiver(recent, hackrf!.FileStatus);
             var rows = traffic.Snapshot(now);
-            status.Text = $"{traffic.Status}   ·   {traffic.Messages:N0} messages   ·   {rows.Length} aircraft";
+            string counts = network ? $"{traffic.Messages:N0} SBS reports   ·   {recent:N0} / 10 s" : $"{traffic.Messages:N0} messages";
+            status.Text = $"{traffic.Status}   ·   {counts}   ·   {rows.Length} aircraft";
             list.BeginUpdate();
             try
             {

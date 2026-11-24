@@ -29,6 +29,8 @@ internal static class Program
             return;
         }
         if (args is ["--check-adsb"]) { Environment.ExitCode = AdsbCheck.Run() ? 0 : 1; return; }
+        if (args is ["--check-adsb-feed", var endpoint])
+        { Environment.ExitCode = AdsbCheck.CheckFeed(endpoint).GetAwaiter().GetResult(); return; }
         if (args.FirstOrDefault()=="--check-adsb-map")
         {
             Environment.ExitCode = args.Length<=2 && AdsbCheck.MapDetail(args.ElementAtOrDefault(1)) ? 0 : 1;

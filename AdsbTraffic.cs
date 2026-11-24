@@ -31,8 +31,7 @@ internal sealed class AdsbTraffic
         int type = Bits(frame, 33, 5);
         lock (aircraft)
         {
-            if (!aircraft.TryGetValue(address, out var a) || now - a.Row.Seen > 120_000)
-                aircraft[address] = a = new Aircraft(address.ToString("X6"), now);
+            var a = GetAircraft(address, now);
             var row = a.Row with { Seen = now, Messages = a.Row.Messages + 1 };
             if (type is >= 1 and <= 4)
             {
@@ -85,11 +84,50 @@ internal sealed class AdsbTraffic
                 a.Even = a.Odd = null;
                 row = row with { Position = null, PositionSeen = null, Altitude = null, Speed = null, Track = null, Climb = null };
             }
-            a.Row = row;
-            Interlocked.Increment(ref messages);
-            ExpireMessages(now);
-            recent.Enqueue(now);
+            Record(a, row, now);
         }
+    }
+
+    internal void Update(SbsReport report, long now)
+    {
+        lock (aircraft)
+        {
+            var a = GetAircraft(report.Address, now);
+            var prior = a.Row;
+            if (report.Altitude.HasValue) a.AltitudeTime = now;
+            if (report.Speed.HasValue || report.Track.HasValue || report.Climb.HasValue) a.VelocityTime = now;
+            Record(a, prior with {
+                Callsign = report.Callsign.Length > 0 ? report.Callsign : prior.Callsign,
+                Altitude = report.Altitude ?? prior.Altitude, Speed = report.Speed ?? prior.Speed,
+                Track = report.Track ?? prior.Track, Climb = report.Climb ?? prior.Climb,
+                Position = report.Position ?? prior.Position, PositionSeen = report.Position.HasValue ? now : prior.PositionSeen,
+                Messages = prior.Messages + 1, Seen = now
+            }, now);
+        }
+    }
+
+    private Aircraft GetAircraft(int address, long now)
+    {
+        if (!aircraft.TryGetValue(address, out var a) || now - a.Row.Seen > 120_000)
+            aircraft[address] = a = new Aircraft(address.ToString("X6"), now);
+        return a;
+    }
+
+    internal void SetCategory(int address, EmitterCategory category, long now)
+    {
+        lock (aircraft)
+        {
+            var a = GetAircraft(address, now);
+            a.Row = a.Row with { Category = category };
+        }
+    }
+
+    private void Record(Aircraft a, AircraftRow row, long now)
+    {
+        a.Row = row;
+        Interlocked.Increment(ref messages);
+        ExpireMessages(now);
+        recent.Enqueue(now);
     }
     private void ExpireMessages(long now)
     {
@@ -110,7 +148,7 @@ internal sealed class AdsbTraffic
         {
             foreach (var key in aircraft.Where(p => now-p.Value.Row.Seen > 120_000).Select(p=>p.Key).ToArray())
                 aircraft.Remove(key);
-            return aircraft.Values.Select(a =>
+            return aircraft.Values.Where(a => a.Row.Messages > 0).Select(a =>
             {
                 var row = a.Row;
                 if (now-a.Row.PositionSeen > 60_000) row = row with { Position=null, PositionSeen=null };

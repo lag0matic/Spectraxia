@@ -30,7 +30,7 @@ internal static class AdsbCheck
             }
         }
         Send(Identification); Send(Velocity); Send(Odd); Send(Identification[..^2]+"99");
-        if (traffic.RecentMessages(now) != 3 || traffic.RecentMessages(9999) != 3) return false;
+        if (traffic.RecentMessages(now) != 3 || traffic.RecentMessages(9999) != 3 || !CheckSbs()) return false;
         now=10001; Send(Even);
         if (traffic.RecentMessages(now) != 1 || !CheckReceiverSettings() || !CheckHackrfTiming()) return false;
         var rows=traffic.Snapshot(now);
@@ -57,6 +57,77 @@ internal static class AdsbCheck
         return traffic.Snapshot(now).Single().FirstSeen==now && MapDetail() && CheckTrails() &&
             AircraftReference.Lookup("40621D") is { Registration:"G-STBC", TypeCode:"B77W", Model:"BOEING 777-300ER" } &&
             AircraftReference.Lookup("FFFFFF")==null;
+    }
+
+    private static bool CheckSbs()
+    {
+        if (BaseStationEndpoint.Parse("radopi.local") != new BaseStationEndpoint("radopi.local", 30003) ||
+            BaseStationEndpoint.Parse("[::1]:30004") != new BaseStationEndpoint("::1", 30004) ||
+            BaseStationEndpoint.Parse("localhost:70000") != null || BaseStationEndpoint.Parse("localhost/path") != null)
+            return false;
+        var traffic = new AdsbTraffic();
+        string[] lines = [
+            "MSG,1,1,1,ABC123,1,,,,,TEST123 ,,,,,,,,,,,0",
+            "MSG,3,1,1,ABC123,1,,,,,,37000,,,39.994145,-84.472192,,,0,,0,0",
+            "MSG,4,1,1,ABC123,1,,,,,,,379,266,,,-2432,,,,,0",
+            "MSG,3,1,1,ABC123,1,,,,,,,,,NaN,500,,,0,,0,0"
+        ];
+        long now = 10;
+        foreach (string line in lines)
+        {
+            if (SbsReport.Parse(line) is not {} report) return false;
+            traffic.Update(report, now++);
+        }
+        var row = traffic.Snapshot(now).Single();
+        if (!CheckNetworkCategory()) return false;
+        return row is { Address: "ABC123", Callsign: "TEST123", Altitude: 37000, Speed: 379, Track: 266,
+            Climb: -2432, Position: { Lat: 39.994145, Lon: -84.472192 }, PositionSeen: 11, Messages: 4 } &&
+            traffic.Snapshot(now+60_000).Single().Position == null &&
+            SbsReport.Parse("MSG,3") == null && SbsReport.Parse(lines[0].Replace("ABC123", "ZZZZZZ")) == null;
+    }
+
+    internal static async Task<int> CheckFeed(string address)
+    {
+        if (BaseStationEndpoint.Parse(address) is not {} endpoint) return 1;
+        var traffic = new AdsbTraffic();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await BaseStationFeed.Run(endpoint, traffic, stop.Token);
+        var rows = traffic.Snapshot(Environment.TickCount64);
+        int positions = rows.Count(row => row.Position.HasValue);
+        var typed = rows.Where(row => row.Category != EmitterCategory.Unknown).ToArray();
+        var counts = typed.GroupBy(row => row.Category).Select(g => $"{g.Count()} {AircraftSymbol.Label(g.Key)}");
+        Console.WriteLine($"{traffic.Messages} SBS reports, {rows.Length} aircraft, {positions} positions, " +
+            $"{typed.Length} categorized ({string.Join(", ", counts)})");
+        return positions > 0 ? 0 : 1;
+    }
+
+    private static bool CheckNetworkCategory()
+    {
+        const string frame = "8D4840D6232CC371C32CE0CC1B88";
+        var report = new SbsReport(0x4840D6, "TEST123", 31000, 401, 72, 0, new(40, -84));
+        foreach (bool rawFirst in new[] { false, true })
+        {
+            var traffic = new AdsbTraffic();
+            const long now = 500_000;
+            if (rawFirst)
+            {
+                BaseStationFeed.ReadCategory("*" + frame + ";", traffic, now - 10);
+                if (traffic.Snapshot(now).Length != 0) return false;
+            }
+            traffic.Update(report, now);
+            if (!rawFirst)
+            {
+                foreach (string invalid in new[] { "*" + frame[..^1] + "9;", "*" + Identification + ";",
+                    "*" + Velocity + ";", "*this is not a frame;", "*" + frame[..^1] + "Z;" })
+                    BaseStationFeed.ReadCategory(invalid, traffic, now);
+                if (traffic.Snapshot(now).Single().Category != EmitterCategory.Unknown) return false;
+                BaseStationFeed.ReadCategory("@000000000001" + frame + ";", traffic, now + 10);
+            }
+            if (traffic.Snapshot(now + 11).Single() is not { Category: EmitterCategory.Large,
+                Messages: 1, Seen: now, Altitude: 31000, Track: 72 } || traffic.Messages != 1 ||
+                traffic.RecentMessages(now + 11) != 1 || traffic.Snapshot(now + 120001).Length != 0) return false;
+        }
+        return true;
     }
 
     private static bool CheckMapClick(AircraftRow[] rows, AircraftRow target)

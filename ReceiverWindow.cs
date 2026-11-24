@@ -373,42 +373,81 @@ internal sealed class ReceiverWindow : Form
         };
         bool recording = false;
         var sources = new ContextMenuStrip();
+        string endpointFile = Path.ChangeExtension(settings, ".sbs-feed");
+        BaseStationEndpoint endpoint = new("localhost", 30003);
+        try { if (File.Exists(endpointFile)) endpoint = BaseStationEndpoint.Parse(File.ReadAllText(endpointFile)) ?? endpoint; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        var networkSource = sources.Items.Add($"Network feed · {endpoint}");
         var dedicated = sources.Items.Add("HackRF · keep listening on RTL");
         var shared = sources.Items.Add("RTL-SDR · switch to aircraft");
-        AdsbWindow? hackrfMap = null;
-        Task hackrfTask = Task.CompletedTask;
+        sources.Items.Add(new ToolStripSeparator());
+        var configure = sources.Items.Add("Set network feed address…");
+        AdsbWindow? externalMap = null;
+        bool mapUsesNetwork = false, switchingSource = false;
+        Task externalTask = Task.CompletedTask;
         aircraft.Click += (_,_) =>
         {
             if (closing) return;
-            if (hackrfMap != null)
-            {
-                if (hackrfMap.WindowState == FormWindowState.Minimized) hackrfMap.WindowState = FormWindowState.Normal;
-                hackrfMap.Activate();
-                return;
-            }
-            dedicated.Enabled = hackrfTask.IsCompleted;
-            shared.Enabled = !recording && !reviewing && !review.Visible;
+            dedicated.Enabled = networkSource.Enabled = !switchingSource;
+            shared.Enabled = !switchingSource && externalMap == null && !recording && !reviewing && !review.Visible;
             sources.Show(aircraft, new Point(0, aircraft.Height));
         };
         Disposed += (_,_) => sources.Dispose();
-        dedicated.Click += (_,_) =>
+        dedicated.Click += async (_,_) => await OpenExternal(false);
+        networkSource.Click += async (_,_) => await OpenExternal(true);
+        configure.Click += async (_,_) =>
         {
-            if (closing || hackrfMap != null || !hackrfTask.IsCompleted) return;
-            var traffic = new AdsbTraffic { Status = "Opening HackRF" };
-            var tuner = new HackrfTuner(Path.ChangeExtension(settings, ".hackrf-gain.json"));
-            var window = new AdsbWindow(traffic, tuner) { StartPosition = FormStartPosition.CenterScreen };
+            string value = Microsoft.VisualBasic.Interaction.InputBox(
+                "Enter the receiver hostname or IP address. Port 30003 is used by default.\n" +
+                "For a different port, enter host:port (for example, receiver.local:31003).",
+                "Network aircraft feed", endpoint.ToString());
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (BaseStationEndpoint.Parse(value) is not {} next)
+            { MessageBox.Show(this, "Enter a hostname or IP address, optionally followed by a port from 1 to 65535.", "Network aircraft feed"); return; }
+            if (next == endpoint) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(endpointFile)!);
+                string tmp = endpointFile + "." + Environment.ProcessId + ".tmp";
+                File.WriteAllText(tmp, next.ToString());
+                File.Move(tmp, endpointFile, true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { MessageBox.Show(this, ex.Message, "Could not save network feed"); return; }
+            endpoint = next;
+            networkSource.Text = $"Network feed · {endpoint}";
+            if (externalMap != null && mapUsesNetwork) { externalMap.Close(); await OpenExternal(true); }
+        };
+        async Task OpenExternal(bool network)
+        {
+            if (closing || switchingSource) return;
+            if (externalMap != null && mapUsesNetwork == network)
+            {
+                if (externalMap.WindowState == FormWindowState.Minimized) externalMap.WindowState = FormWindowState.Normal;
+                externalMap.Activate(); return;
+            }
+            switchingSource = true;
+            try { externalMap?.Close(); await externalTask; }
+            finally { switchingSource = false; }
+            if (closing) return;
+            var traffic = new AdsbTraffic { Status = network ? $"Connecting to {endpoint}" : "Opening HackRF" };
+            var tuner = network ? null : new HackrfTuner(Path.ChangeExtension(settings, ".hackrf-gain.json"));
+            var window = tuner == null ? new AdsbWindow(traffic) : new AdsbWindow(traffic, tuner);
+            window.StartPosition = FormStartPosition.CenterScreen;
             var stop = new CancellationTokenSource();
-            hackrfMap = window;
-            var session = hackrfTask = Task.Run(() => HackrfAdsb.Run(traffic, tuner, stop.Token));
+            externalMap = window;
+            mapUsesNetwork = network;
+            var session = externalTask = tuner == null ? BaseStationFeed.Run(endpoint, traffic, stop.Token)
+                : Task.Run(() => HackrfAdsb.Run(traffic, tuner, stop.Token));
             window.FormClosed += async (_,_) =>
             {
-                hackrfMap = null;
+                externalMap = null;
                 stop.Cancel();
                 try { await session; }
                 finally { stop.Dispose(); }
             };
             window.Show();
-        };
+        }
         shared.Click += (_,_) =>
         {
             if (recording || reviewing || closing) return;
@@ -831,8 +870,8 @@ internal sealed class ReceiverWindow : Form
             libraryPanel.Flush();
             poll.Stop();
             cancel?.Cancel();
-            hackrfMap?.Close();
-            var pending=Task.WhenAll(review.Shutdown(),recorder.Shutdown(),running??Task.CompletedTask,hackrfTask);
+            externalMap?.Close();
+            var pending=Task.WhenAll(review.Shutdown(),recorder.Shutdown(),running??Task.CompletedTask,externalTask);
             if(pending.IsCompleted) {drained=true; return;}
             e.Cancel=true;
             await pending;
