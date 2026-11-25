@@ -96,7 +96,13 @@ internal sealed class CapturePanel : FlowLayoutPanel
     }
     private async Task Observe(Task<string> task, bool live)
     {
-        try { string path = await task; note.Text = $"Saved {path}"; }
+        try
+        {
+            string path = await task;
+            note.Text = path.EndsWith(CaptureFiles.TruncatedSuffix, StringComparison.Ordinal)
+                ? $"Disk writer fell behind. Saved a truncated recording to {path}"
+                : $"Saved {path}";
+        }
         catch (Exception ex) { note.Text = ex.Message; }
         finally
         {

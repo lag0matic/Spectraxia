@@ -15,7 +15,7 @@ internal sealed class AdsbTraffic
     {
         internal AircraftRow Row = new(address, "", null, null, null, null, null, firstSeen, 0) { FirstSeen=firstSeen };
         internal Cpr? Even, Odd;
-        internal long VelocityTime, AltitudeTime;
+        internal long SpeedTime, TrackTime, ClimbTime, AltitudeTime;
     }
     private readonly Dictionary<int, Aircraft> aircraft = new();
     private long messages;
@@ -61,7 +61,7 @@ internal sealed class AdsbTraffic
             }
             else if (type == 19)
             {
-                a.VelocityTime = now;
+                a.SpeedTime = a.TrackTime = a.ClimbTime = now;
                 int raw = Bits(frame, 70, 9);
                 row = row with { Climb = raw == 0 ? null : (raw-1)*64*(Bits(frame,69,1)==0 ? 1 : -1) };
                 int subtype = Bits(frame,38,3);
@@ -95,7 +95,9 @@ internal sealed class AdsbTraffic
             var a = GetAircraft(report.Address, now);
             var prior = a.Row;
             if (report.Altitude.HasValue) a.AltitudeTime = now;
-            if (report.Speed.HasValue || report.Track.HasValue || report.Climb.HasValue) a.VelocityTime = now;
+            if (report.Speed.HasValue) a.SpeedTime = now;
+            if (report.Track.HasValue) a.TrackTime = now;
+            if (report.Climb.HasValue) a.ClimbTime = now;
             Record(a, prior with {
                 Callsign = report.Callsign.Length > 0 ? report.Callsign : prior.Callsign,
                 Altitude = report.Altitude ?? prior.Altitude, Speed = report.Speed ?? prior.Speed,
@@ -152,7 +154,9 @@ internal sealed class AdsbTraffic
             {
                 var row = a.Row;
                 if (now-a.Row.PositionSeen > 60_000) row = row with { Position=null, PositionSeen=null };
-                if (now-a.VelocityTime > 60_000) row = row with { Speed=null, Track=null, Climb=null };
+                if (now-a.SpeedTime > 60_000) row = row with { Speed=null };
+                if (now-a.TrackTime > 60_000) row = row with { Track=null };
+                if (now-a.ClimbTime > 60_000) row = row with { Climb=null };
                 if (now-a.AltitudeTime > 60_000) row = row with { Altitude=null };
                 return row;
             }).OrderBy(a=>a.Address).ToArray();

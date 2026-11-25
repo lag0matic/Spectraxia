@@ -14,6 +14,7 @@ internal enum CaptureTracks { Audio, Wideband, Both }
 
 internal sealed class CaptureTape
 {
+    private sealed class RecordingOverrun : IOException;
     private readonly object sync = new();
     private readonly Queue<TapeBlock> ring = new();
     private double seconds;
@@ -30,7 +31,7 @@ internal sealed class CaptureTape
                 seconds -= ring.Dequeue().Seconds;
             if (output != null && !output.Writer.TryWrite(block))
             {
-                output.Writer.TryComplete(new IOException("Recording stopped because the disk writer fell behind."));
+                output.Writer.TryComplete(new RecordingOverrun());
                 output = null;
             }
         }
@@ -46,12 +47,25 @@ internal sealed class CaptureTape
             output = queue;
             return Task.Run(async () =>
             {
+                var files = new CaptureFiles(folder, tracks);
                 try
                 {
-                    using var files = new CaptureFiles(folder, tracks);
+                    using var capture = files;
                     foreach (var b in prefix) files.Write(b);
-                    await foreach (var b in queue.Reader.ReadAllAsync()) files.Write(b);
+                    try
+                    {
+                        await foreach (var b in queue.Reader.ReadAllAsync()) files.Write(b);
+                    }
+                    catch (RecordingOverrun)
+                    {
+                        // The reader drains the blocks already queued before reporting the overrun.
+                        return files.Finish(truncated: true);
+                    }
                     return files.Finish();
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw files.DescribeFailure(ex);
                 }
                 finally
                 {
@@ -67,14 +81,23 @@ internal sealed class CaptureTape
     }
     internal static string Export(string folder, CaptureTracks tracks, TapeBlock[] blocks)
     {
-        using var files = new CaptureFiles(folder, tracks);
-        foreach (var block in blocks) files.Write(block);
-        return files.Finish();
+        var files = new CaptureFiles(folder, tracks);
+        try
+        {
+            using var capture = files;
+            foreach (var block in blocks) files.Write(block);
+            return files.Finish();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw files.DescribeFailure(ex);
+        }
     }
 }
 
 internal sealed class CaptureFiles : IDisposable
 {
+    internal const string TruncatedSuffix = "-truncated";
     private readonly string destination, working;
     private readonly CaptureTracks tracks;
     private StreamWriter? timeline;
@@ -132,28 +155,34 @@ internal sealed class CaptureFiles : IDisposable
     }
     private void ClosePart()
     {
+        var (closingWav, closingIq, closingTimeline) = (wav, iq, timeline);
+        wav = null; iq = null; timeline = null; previous = null;
+        frames = pairs = 0;
         try
         {
-            if (wav != null)
+            if (closingWav != null)
             {
-                int bytes = checked((int)(wav.BaseStream.Length - 44));
-                wav.Seek(4, SeekOrigin.Begin); wav.Write(bytes + 36);
-                wav.Seek(40, SeekOrigin.Begin); wav.Write(bytes);
+                int bytes = checked((int)(closingWav.BaseStream.Length - 44));
+                closingWav.Seek(4, SeekOrigin.Begin); closingWav.Write(bytes + 36);
+                closingWav.Seek(40, SeekOrigin.Begin); closingWav.Write(bytes);
             }
         }
         finally
         {
-            try { wav?.Dispose(); } finally { try { iq?.Dispose(); } finally { timeline?.Dispose(); } }
-            wav = null; iq = null; timeline = null; previous = null;
-            frames = pairs = 0;
+            try { closingWav?.Dispose(); } finally { try { closingIq?.Dispose(); } finally { closingTimeline?.Dispose(); } }
         }
     }
-    internal string Finish()
+    internal Exception DescribeFailure(Exception failure) => Directory.Exists(working)
+        ? new IOException($"{failure.Message} Partial recording files are in {working}", failure)
+        : failure;
+
+    internal string Finish(bool truncated = false)
     {
         if (part == 0) throw new InvalidOperationException("No received samples to save.");
         ClosePart();
-        Directory.Move(working, destination);
-        return destination;
+        string completed = truncated ? destination + TruncatedSuffix : destination;
+        Directory.Move(working, completed);
+        return completed;
     }
     public void Dispose() => ClosePart();
 }

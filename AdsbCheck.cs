@@ -80,6 +80,9 @@ internal static class AdsbCheck
         }
         var row = traffic.Snapshot(now).Single();
         if (!CheckNetworkCategory()) return false;
+        traffic.Update(new SbsReport(0xABC123, "", null, null, null, 640, null), now + 65_000);
+        if (traffic.Snapshot(now + 65_000).Single() is not { Speed: null, Track: null, Climb: 640 })
+            return false;
         return row is { Address: "ABC123", Callsign: "TEST123", Altitude: 37000, Speed: 379, Track: 266,
             Climb: -2432, Position: { Lat: 39.994145, Lon: -84.472192 }, PositionSeen: 11, Messages: 4 } &&
             traffic.Snapshot(now+60_000).Single().Position == null &&

@@ -993,9 +993,9 @@ internal sealed class ReceiverWindow : Form
 
     private void Receive(long hz, uint output, ReceiverSettings config, CancellationToken token, BiasT deviceBias)
     {
-        Headphones? audio = null;
         try
         {
+            using var audio = new LiveAudioOutput(output);
             var decoder = new ReceiverAudio(config.SampleRate);
             var voiceFilters = new VoiceFilters();
             AprsInbox? packetOwner = null;
@@ -1007,7 +1007,6 @@ internal sealed class ReceiverWindow : Form
             var session=Guid.NewGuid();
             DateTimeOffset? origin=null;
             long pairs=0;
-            bool stereo = false;
             long drawAfter = 0;
             long WantedCenter()
             {
@@ -1028,8 +1027,7 @@ internal sealed class ReceiverWindow : Form
                 var selected = safeT;
                 bool monitorSite = selected != null && target == null && !reviewing && station == selected.Site.Hz && active.Mode == ListenMode.NFM;
                 controlChannel.Feed(monitorSite ? selected : null, iq, blockCenter, config.SampleRate, settled);
-                bool needsStereoOutput = active.Mode is ListenMode.IQ or ListenMode.WFM;
-                if (stereo != needsStereoOutput) { audio?.Dispose(); audio = null; stereo = needsStereoOutput; }
+                bool stereo = active.Mode is ListenMode.IQ or ListenMode.WFM;
                 var owner = settled && target == null && !reviewing && station == AprsWindow.Dial.Hz &&
                     active.Mode == ListenMode.NFM && TuningView.Fits(station,blockCenter,config.SampleRate,active.Mode,active.Width) ? aprsInbox : null;
                 if (owner != packetOwner || blockCenter != packetCenter)
@@ -1064,15 +1062,17 @@ internal sealed class ReceiverWindow : Form
                 pairs+=iq.Length/2;
                 signalTenths = (int)Math.Round(decoder.Level * 10);
                 squelchOpen = decoder.Gate;
-                if(reviewing || monitorSite && selected!.FollowGroup < 0) { audio?.Dispose(); audio=null; }
-                else { audio ??= new Headphones(output,stereo); audio.Play(pcm,Volatile.Read(ref volume)); }
+                bool playAudio = !reviewing && (!monitorSite || selected!.FollowGroup >= 0);
+                audio.Play(pcm, Volatile.Read(ref volume), playAudio, stereo, Environment.TickCount64);
                 message = active.Mode == ListenMode.WFM ? (decoder.StereoLocked && !active.ForceMono ? "Live WFM stereo" : "Live WFM mono") : $"Live {Listening.Name(active.Mode)}";
                 if (program >= 0) message = digitalAudio ? $"Live HD{program + 1}" : $"Live · waiting for HD{program + 1}";
+                if (playAudio && audio.Error != null) message += " · Audio unavailable";
                 if (settled && Environment.TickCount64 >= drawAfter && iq.Length >= Spectrum.Bins * 2)
                 {
                     broadcast = active.Mode == ListenMode.WFM ? new Broadcast(decoder.DecodedStation, decoder.StationName, decoder.RadioText) : null;
                     long halfRate = config.SampleRate / 2;
-                    audioDiagnostics = $"RF capture {(blockCenter-halfRate)/1e6:F6}–{(blockCenter+halfRate)/1e6:F6} MHz · hardware retunes {Volatile.Read(ref retunes)} · audio queue empty {audio?.EmptyQueueEvents??0} · dropped frames {audio?.DroppedFrames??0}";
+                    audioDiagnostics = $"RF capture {(blockCenter-halfRate)/1e6:F6}–{(blockCenter+halfRate)/1e6:F6} MHz · hardware retunes {Volatile.Read(ref retunes)} · audio queue empty {audio.EmptyQueueEvents} · dropped frames {audio.DroppedFrames}";
+                    if (playAudio && audio.Error is {} audioError) audioDiagnostics += $" · {audioError}";
                     Interlocked.Exchange(ref latest, new Frame(blockCenter, config.SampleRate, Spectrum.Analyze(iq, decoder.FilteredIq),
                         target, Environment.TickCount64, decoder.Gate && decoder.DecodedStation == station));
                     drawAfter = Environment.TickCount64 + 48;
@@ -1085,7 +1085,7 @@ internal sealed class ReceiverWindow : Form
             message = ex is DllNotFoundException ? "RTL-SDR native library unavailable" : ex.Message;
             if (!token.IsCancellationRequested) Interlocked.Exchange(ref retryAfter, Environment.TickCount64 + 1800);
         }
-        finally { hdReception = null; audio?.Dispose(); }
+        finally { hdReception = null; }
     }
 
     private string MHz() => (frequency / 1_000_000m).ToString("0.000000", CultureInfo.InvariantCulture);

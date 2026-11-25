@@ -52,7 +52,10 @@ internal sealed class Headphones : IDisposable
     internal void Play(short[] samples, int volume = 100)
     {
         while (pending.TryPeek(out var head) && (Marshal.PtrToStructure<Header>(head).Flags & 1) != 0)
-            Release(pending.Dequeue());
+        {
+            Release(head);
+            pending.Dequeue();
+        }
         if (samples.Length == 0) return;
         if (pending.Count >= 12) { DroppedFrames += samples.Length / channels; return; }
         if (started && pending.Count == 0) EmptyQueueEvents++;
@@ -95,7 +98,11 @@ internal sealed class Headphones : IDisposable
         while (pending.TryPeek(out var head))
         {
             token.ThrowIfCancellationRequested();
-            if ((Marshal.PtrToStructure<Header>(head).Flags & 1) != 0) Release(pending.Dequeue());
+            if ((Marshal.PtrToStructure<Header>(head).Flags & 1) != 0)
+            {
+                Release(head);
+                pending.Dequeue();
+            }
             else if (Environment.TickCount64 > deadline) throw new IOException("Audio output did not drain.");
             else Thread.Sleep(2);
         }
@@ -103,7 +110,56 @@ internal sealed class Headphones : IDisposable
     public void Dispose()
     {
         waveOutReset(handle);
-        while (pending.Count != 0) Release(pending.Dequeue());
-        waveOutClose(handle);
+        IOException? failure = null;
+        while (pending.TryDequeue(out var header))
+        {
+            try { Release(header); }
+            catch (IOException ex) { failure ??= ex; }
+        }
+        int closed = waveOutClose(handle);
+        if (failure != null) throw failure;
+        Radio.Check(closed, "Close audio output");
+    }
+}
+
+// Owned by the receiver worker. Audio device errors must not escape into the RTL callback.
+internal sealed class LiveAudioOutput(uint endpoint, Func<uint, bool, Headphones>? open = null) : IDisposable
+{
+    private Headphones? sink;
+    private bool stereo;
+    private long retryAfter;
+    internal string? Error { get; private set; }
+    internal int EmptyQueueEvents => sink?.EmptyQueueEvents ?? 0;
+    internal long DroppedFrames => sink?.DroppedFrames ?? 0;
+
+    internal void Play(short[] pcm, int volume, bool enabled, bool useStereo, long now)
+    {
+        if (stereo != useStereo || !enabled)
+        {
+            Dispose();
+            stereo = useStereo;
+            retryAfter = 0;
+        }
+        if (!enabled || now < retryAfter) return;
+        try
+        {
+            sink ??= open == null ? new Headphones(endpoint, stereo) : open(endpoint, stereo);
+            sink.Play(pcm, volume);
+            Error = null;
+        }
+        catch (IOException ex)
+        {
+            Dispose();
+            Error = ex.Message;
+            retryAfter = now + 1500;
+        }
+    }
+
+    public void Dispose()
+    {
+        var previous = sink;
+        sink = null;
+        try { previous?.Dispose(); }
+        catch (IOException ex) { Error = ex.Message; }
     }
 }

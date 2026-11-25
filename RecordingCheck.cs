@@ -86,9 +86,25 @@ internal static class RecordingCheck
             var failed = tape.Start(Path.Combine(waveOnly, "audio-001.wav"), CaptureTracks.Audio, false);
             tape.Append(final); tape.Stop();
             try { failed.GetAwaiter().GetResult(); return false; } catch (IOException) { }
-            return tape.Pin()[^1] == final;
+            return tape.Pin()[^1] == final && CheckAudioFailure();
         }
         finally { RemoveScratch(root); }
+    }
+
+    private static bool CheckAudioFailure()
+    {
+        int attempts = 0;
+        using var audio = new LiveAudioOutput(0, (_, _) =>
+        {
+            attempts++;
+            throw new IOException("Test audio endpoint unavailable");
+        });
+        short[] pcm = [123, -456];
+        audio.Play(pcm, 100, true, false, 0);
+        audio.Play(pcm, 100, true, false, 100);
+        if (attempts != 1 || audio.Error == null) return false;
+        audio.Play(pcm, 100, true, false, 1600);
+        return attempts == 2 && pcm is [123, -456];
     }
     internal static int ReplayFixture(string input, int rate, long center)
     {

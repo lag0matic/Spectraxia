@@ -41,15 +41,16 @@ internal sealed record SbsReport(int Address, string Callsign, int? Altitude, in
 
 internal static class BaseStationFeed
 {
-    internal static Task Run(BaseStationEndpoint endpoint, AdsbTraffic traffic, CancellationToken stop)
+    internal static Task Run(BaseStationEndpoint endpoint, AdsbTraffic traffic, CancellationToken stop,
+        TimeSpan? idleTimeout = null)
     {
         var reports = RunConnection(endpoint, line =>
         {
             if (SbsReport.Parse(line) is {} report) traffic.Update(report, Environment.TickCount64);
-        }, status => traffic.Status = status, 2000, stop);
+        }, status => traffic.Status = status, 2000, idleTimeout ?? TimeSpan.FromSeconds(30), stop);
         if (endpoint.Port != 30003) return reports;
         var categories = RunConnection(new(endpoint.Host, 30002),
-            line => ReadCategory(line, traffic, Environment.TickCount64), null, 15000, stop);
+            line => ReadCategory(line, traffic, Environment.TickCount64), null, 15000, idleTimeout ?? TimeSpan.FromSeconds(30), stop);
         return Task.WhenAll(reports, categories);
     }
 
@@ -67,7 +68,7 @@ internal static class BaseStationFeed
     }
 
     private static async Task RunConnection(BaseStationEndpoint endpoint, Action<string> onLine,
-        Action<string>? status, int retryMs, CancellationToken stop)
+        Action<string>? status, int retryMs, TimeSpan idleTimeout, CancellationToken stop)
     {
         try
         {
@@ -83,8 +84,12 @@ internal static class BaseStationFeed
                         await client.ConnectAsync(endpoint.Host, endpoint.Port, timeout.Token).ConfigureAwait(false);
                     }
                     status?.Invoke($"BaseStation · {endpoint}");
-                    await Read(client.GetStream(), onLine, stop).ConfigureAwait(false);
+                    await Read(client.GetStream(), onLine, idleTimeout, stop).ConfigureAwait(false);
                     status?.Invoke($"Feed closed · retrying {endpoint}");
+                }
+                catch (TimeoutException) when (!stop.IsCancellationRequested)
+                {
+                    status?.Invoke($"Feed idle · retrying {endpoint}");
                 }
                 catch (Exception ex) when (!stop.IsCancellationRequested && ex is IOException or SocketException or OperationCanceledException)
                 {
@@ -93,17 +98,24 @@ internal static class BaseStationFeed
                 await Task.Delay(retryMs, stop).ConfigureAwait(false);
             }
         }
-        catch (Exception ex) when (stop.IsCancellationRequested && ex is OperationCanceledException or SocketException or IOException) { }
+        catch (Exception ex) when (stop.IsCancellationRequested && ex is OperationCanceledException or SocketException or IOException or TimeoutException) { }
     }
 
-    private static async Task Read(NetworkStream stream, Action<string> onLine, CancellationToken stop)
+    private static async Task Read(NetworkStream stream, Action<string> onLine, TimeSpan idleTimeout, CancellationToken stop)
     {
         var block = new byte[8192];
         var line = new byte[1024];
         int length = 0;
-        int count;
-        while ((count = await stream.ReadAsync(block, stop).ConfigureAwait(false)) != 0)
+        using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        while (true)
         {
+            int count;
+            readTimeout.CancelAfter(idleTimeout);
+            try { count = await stream.ReadAsync(block, readTimeout.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!stop.IsCancellationRequested && readTimeout.IsCancellationRequested)
+            { throw new TimeoutException(); }
+            readTimeout.CancelAfter(Timeout.InfiniteTimeSpan);
+            if (count == 0) return;
             for (int i = 0; i < count; i++)
             {
                 byte b = block[i];
